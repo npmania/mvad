@@ -45,6 +45,7 @@ The commands are:
 	relays      list relays
 	connect     connect to a relay
 	disconnect  disconnect
+	reconnect   reconnect to the last relay
 	status      print connection status
 	version     print version
 `
@@ -88,6 +89,8 @@ func main() {
 		err = connect(args)
 	case "disconnect":
 		err = disconnect(args)
+	case "reconnect":
+		err = reconnect(args)
 	case "status":
 		err = showStatus(args)
 	case "version":
@@ -507,6 +510,37 @@ func connect(args []string) error {
 		return err
 	}
 	return nil
+}
+
+func reconnect(args []string) error {
+	if os.Geteuid() != 0 {
+		return errors.New("this command needs root; rerun with sudo")
+	}
+	fs := flag.NewFlagSet("reconnect", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	allowLAN := fs.Bool("allow-lan", false, "allow traffic to private LAN ranges")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+		return usagef("usage: mvad reconnect [--allow-lan]")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if cfg.LastRelay == "" {
+		return errors.New("no previous connection to reconnect to")
+	}
+	var cargs []string
+	if *allowLAN {
+		cargs = append(cargs, "--allow-lan")
+	}
+	if cfg.LastEntryRelay != "" {
+		cargs = append(cargs, "--via", cfg.LastEntryRelay)
+	}
+	cargs = append(cargs, cfg.LastRelay)
+	if err := disconnect(nil); err != nil {
+		return err
+	}
+	return connect(cargs)
 }
 
 func disconnect(args []string) error {
