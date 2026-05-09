@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/http"
 	"net/netip"
 	"os"
 	"runtime/debug"
@@ -32,6 +33,7 @@ const usageText = `usage: mvad <command> [arguments]
 The commands are:
 
 	login       store a Mullvad account number
+	logout      revoke this device and clear stored credentials
 	relays      list relays
 	connect     connect to a relay
 	disconnect  disconnect
@@ -57,7 +59,7 @@ func main() {
 	args := flag.Args()[1:]
 	cmd := flag.Arg(0)
 	switch cmd {
-	case "login", "relays":
+	case "login", "logout", "relays":
 		if os.Geteuid() == 0 {
 			fmt.Fprintln(os.Stderr, "mvad: warning: running as root; this writes config to root's home, breaking subsequent unprivileged calls")
 		}
@@ -66,6 +68,8 @@ func main() {
 	switch cmd {
 	case "login":
 		err = login(args)
+	case "logout":
+		err = logout(args)
 	case "relays":
 		err = listRelays(args)
 	case "connect":
@@ -140,6 +144,40 @@ func login(args []string) error {
 		return errors.Join(err, revokeErr)
 	}
 	return nil
+}
+
+func logout(args []string) error {
+	if len(args) != 0 {
+		return usagef("usage: mvad logout")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if cfg.AccountToken == "" || cfg.DeviceID == "" {
+		return errors.New("not logged in")
+	}
+	s, err := status.Read(ifname)
+	if err != nil && !errors.Is(err, status.ErrNotConnected) {
+		return err
+	}
+	if s.Up {
+		return errors.New("currently connected; run mvad disconnect first")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if err := mullvad.New().RevokeDevice(ctx, cfg.AccountToken, cfg.DeviceID); err != nil {
+		var apiErr *mullvad.APIError
+		if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusNotFound {
+			return err
+		}
+	}
+	cfg.AccountToken = ""
+	cfg.DeviceID = ""
+	cfg.PrivateKey = ""
+	cfg.DeviceIPv4 = netip.Prefix{}
+	cfg.DeviceIPv6 = netip.Prefix{}
+	return cfg.Save()
 }
 
 func listRelays(args []string) error {
