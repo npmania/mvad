@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"runtime/debug"
 	"sort"
 	"text/tabwriter"
 	"time"
@@ -74,7 +75,7 @@ func main() {
 	case "status":
 		err = showStatus(args)
 	case "version":
-		fmt.Println("mvad (devel)")
+		fmt.Println("mvad", versionString())
 		return
 	default:
 		err = usagef("unknown command %q", cmd)
@@ -89,6 +90,13 @@ func main() {
 	}
 	fmt.Fprintln(os.Stderr, "mvad:", err)
 	os.Exit(1)
+}
+
+func versionString() string {
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return "(devel)"
 }
 
 func login(args []string) error {
