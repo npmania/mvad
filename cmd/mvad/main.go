@@ -36,6 +36,7 @@ The commands are:
 	login       log in to a Mullvad account
 	logout      revoke this device and clear stored credentials
 	devices     list or remove devices on this account
+	rotate-key  generate a new WireGuard key for this device
 	relays      list relays
 	connect     connect to a relay
 	disconnect  disconnect
@@ -61,7 +62,7 @@ func main() {
 	args := flag.Args()[1:]
 	cmd := flag.Arg(0)
 	switch cmd {
-	case "login", "logout", "relays":
+	case "login", "logout", "relays", "rotate-key":
 		if os.Geteuid() == 0 {
 			fmt.Fprintln(os.Stderr, "mvad: warning: running as root; this writes config to root's home, breaking subsequent unprivileged calls")
 		}
@@ -76,6 +77,8 @@ func main() {
 		err = listRelays(args)
 	case "devices":
 		err = devices(args)
+	case "rotate-key":
+		err = rotateKey(args)
 	case "connect":
 		err = connect(args)
 	case "disconnect":
@@ -271,6 +274,54 @@ func devicesRemove(cfg *config.Config, args []string) error {
 			return nil
 		}
 		return err
+	}
+	return nil
+}
+
+func rotateKey(args []string) error {
+	if len(args) != 0 {
+		return usagef("usage: mvad rotate-key")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if cfg.AccountToken == "" || cfg.DeviceID == "" {
+		return errors.New("not logged in")
+	}
+	s, err := status.Read(ifname)
+	if err != nil && !errors.Is(err, status.ErrNotConnected) {
+		return err
+	}
+	if s.Up {
+		return errors.New("currently connected; run mvad disconnect first")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	c := mullvad.New()
+	priv, err := wgtypes.GeneratePrivateKey()
+	if err != nil {
+		return err
+	}
+	dev, err := c.RegisterDevice(ctx, cfg.AccountToken, priv.PublicKey())
+	if err != nil {
+		return err
+	}
+	oldID := cfg.DeviceID
+	cfg.DeviceID = dev.ID
+	cfg.PrivateKey = priv.String()
+	cfg.DeviceIPv4 = dev.IPv4
+	cfg.DeviceIPv6 = dev.IPv6
+	if err := cfg.Save(); err != nil {
+		revokeErr := c.RevokeDevice(ctx, cfg.AccountToken, dev.ID)
+		return errors.Join(err, revokeErr)
+	}
+	if err := c.RevokeDevice(ctx, cfg.AccountToken, oldID); err != nil {
+		var apiErr *mullvad.APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+			return nil
+		}
+		return fmt.Errorf("revoke old device %s: %w (clean up with: mvad devices remove %s)", oldID, err, oldID)
 	}
 	return nil
 }
