@@ -1,0 +1,20 @@
+[
+  {
+    "id": "d-abc-123",
+    "name": "happy-octopus",
+    "pubkey": "BLNHNoGO88LjV/wDBa7CUUwUzPq/fO2UwcGLy56hKy4=",
+    "ipv4_address": "10.64.0.5/32",
+    "ipv6_address": "fc00:bbbb:bbbb:bb01::4:5/128",
+    "hijack_dns": false,
+    "created": "2026-01-02T03:04:05Z"
+  },
+  {
+    "id": "d-def-456",
+    "name": "swift-marmot",
+    "pubkey": "kGVf1Y7RmkUyKvCyYy0FPQ7cb89vUQTH2yUlF8PzLk0=",
+    "ipv4_address": "10.64.0.6/32",
+    "ipv6_address": "",
+    "hijack_dns": false,
+    "created": "2026-03-04T05:06:07Z"
+  }
+]

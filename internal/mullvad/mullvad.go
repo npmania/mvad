@@ -157,6 +157,22 @@ func (c *Client) AccountExpiry(ctx context.Context, account string) (time.Time, 
 	return resp.Expiry, nil
 }
 
+func (c *Client) ListDevices(ctx context.Context, account string) ([]Device, error) {
+	var raw []deviceJSON
+	if err := c.authedJSON(ctx, account, "GET", "/accounts/v1/devices", nil, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]Device, 0, len(raw))
+	for _, d := range raw {
+		dev, err := d.toDevice()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, dev)
+	}
+	return out, nil
+}
+
 func (c *Client) RegisterDevice(ctx context.Context, account string, pub wgtypes.Key) (Device, error) {
 	body := struct {
 		PubKey    string `json:"pubkey"`

@@ -178,6 +178,53 @@ func TestRegisterDevice(t *testing.T) {
 	}
 }
 
+func TestListDevices(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/auth/v1/token":
+			writeToken(t, w, "tok-list")
+		case "/accounts/v1/devices":
+			if r.Method != "GET" {
+				t.Errorf("method = %s", r.Method)
+			}
+			if got := r.Header.Get("Authorization"); got != "Bearer tok-list" {
+				t.Errorf("Authorization = %q", got)
+			}
+			w.Write(fixture(t, "devices.json"))
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	devs, err := c.ListDevices(context.Background(), "acct")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devs) != 2 {
+		t.Fatalf("got %d devices, want 2", len(devs))
+	}
+	a := devs[0]
+	if a.ID != "d-abc-123" || a.Name != "happy-octopus" {
+		t.Errorf("dev[0] = %+v", a)
+	}
+	if a.IPv4.String() != "10.64.0.5/32" {
+		t.Errorf("dev[0] ipv4 = %v", a.IPv4)
+	}
+	if a.IPv6.String() != "fc00:bbbb:bbbb:bb01::4:5/128" {
+		t.Errorf("dev[0] ipv6 = %v", a.IPv6)
+	}
+	want, _ := time.Parse(time.RFC3339, "2026-01-02T03:04:05Z")
+	if !a.Created.Equal(want) {
+		t.Errorf("dev[0] created = %v", a.Created)
+	}
+	b := devs[1]
+	if b.ID != "d-def-456" || b.Name != "swift-marmot" {
+		t.Errorf("dev[1] = %+v", b)
+	}
+	if b.IPv6.IsValid() {
+		t.Errorf("dev[1] ipv6 should be zero, got %v", b.IPv6)
+	}
+}
+
 func TestRevokeDevice(t *testing.T) {
 	var deletes atomic.Int32
 	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

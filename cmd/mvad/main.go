@@ -34,6 +34,7 @@ The commands are:
 
 	login       store a Mullvad account number
 	logout      revoke this device and clear stored credentials
+	devices     list or remove devices on this account
 	relays      list relays
 	connect     connect to a relay
 	disconnect  disconnect
@@ -72,6 +73,8 @@ func main() {
 		err = logout(args)
 	case "relays":
 		err = listRelays(args)
+	case "devices":
+		err = devices(args)
 	case "connect":
 		err = connect(args)
 	case "disconnect":
@@ -178,6 +181,63 @@ func logout(args []string) error {
 	cfg.DeviceIPv4 = netip.Prefix{}
 	cfg.DeviceIPv6 = netip.Prefix{}
 	return cfg.Save()
+}
+
+func devices(args []string) error {
+	if len(args) < 1 {
+		return usagef("usage: mvad devices <list|remove>")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if cfg.AccountToken == "" {
+		return errors.New("not logged in")
+	}
+	switch args[0] {
+	case "list":
+		return devicesList(cfg, args[1:])
+	case "remove":
+		return devicesRemove(cfg, args[1:])
+	default:
+		return usagef("unknown devices subcommand %q", args[0])
+	}
+}
+
+func devicesList(cfg *config.Config, args []string) error {
+	if len(args) != 0 {
+		return usagef("usage: mvad devices list")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	devs, err := mullvad.New().ListDevices(ctx, cfg.AccountToken)
+	if err != nil {
+		return err
+	}
+	sort.Slice(devs, func(i, j int) bool { return devs[i].Created.Before(devs[j].Created) })
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	for _, d := range devs {
+		pub := d.PublicKey.String()[:8]
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", d.ID, d.Name, d.IPv4, d.Created.UTC().Format(time.RFC3339), pub)
+	}
+	return w.Flush()
+}
+
+func devicesRemove(cfg *config.Config, args []string) error {
+	if len(args) != 1 {
+		return usagef("usage: mvad devices remove <id>")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	err := mullvad.New().RevokeDevice(ctx, cfg.AccountToken, args[0])
+	if err != nil {
+		var apiErr *mullvad.APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func listRelays(args []string) error {
