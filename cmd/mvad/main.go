@@ -467,7 +467,7 @@ func connect(args []string) error {
 		wg.Down(ifname)
 		return err
 	}
-	if err := dns.Set(mullvadDNS); err != nil {
+	if err := dns.Set(ifname, mullvadDNS); err != nil {
 		route.Unset(ifname, relay.IPv4)
 		wg.Down(ifname)
 		return err
@@ -486,7 +486,7 @@ func disconnect(args []string) error {
 	if cfg, err := config.Load(); err == nil {
 		endpoint = cfg.LastEndpoint.Addr()
 	}
-	return errors.Join(dns.Restore(), route.Unset(ifname, endpoint), wg.Down(ifname))
+	return errors.Join(dns.Restore(ifname), route.Unset(ifname, endpoint), wg.Down(ifname))
 }
 
 func showStatus(args []string) error {

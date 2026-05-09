@@ -4,5 +4,5 @@ package dns
 
 import "net/netip"
 
-func set([]netip.Addr) error { return ErrUnsupported }
-func restore() error         { return ErrUnsupported }
+func set(string, []netip.Addr) error { return ErrUnsupported }
+func restore(string) error           { return ErrUnsupported }

@@ -1,5 +1,4 @@
-// Package dns swaps /etc/resolv.conf to point at given resolvers
-// and restores the original on demand.
+// Package dns sets DNS for an interface and restores it on demand.
 package dns
 
 import (
@@ -9,5 +8,5 @@ import (
 
 var ErrUnsupported = errors.New("dns: unsupported platform")
 
-func Set(servers []netip.Addr) error { return set(servers) }
-func Restore() error                  { return restore() }
+func Set(iface string, servers []netip.Addr) error { return set(iface, servers) }
+func Restore(iface string) error                   { return restore(iface) }
