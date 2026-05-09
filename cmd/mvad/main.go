@@ -175,6 +175,9 @@ func listRelays(args []string) error {
 }
 
 func connect(args []string) error {
+	if os.Geteuid() != 0 {
+		return errors.New("this command needs root; rerun with sudo")
+	}
 	if len(args) != 1 {
 		return usagef("usage: mvad connect <relay>")
 	}
@@ -227,6 +230,9 @@ func connect(args []string) error {
 }
 
 func disconnect(args []string) error {
+	if os.Geteuid() != 0 {
+		return errors.New("this command needs root; rerun with sudo")
+	}
 	if len(args) != 0 {
 		return usagef("usage: mvad disconnect")
 	}

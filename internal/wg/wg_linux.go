@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 
 	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
@@ -81,7 +83,13 @@ func down(name string) error {
 	if name == "" {
 		return errors.New("wg: empty interface name")
 	}
-	return run("ip", "link", "del", name)
+	if err := run("ip", "link", "del", name); err != nil {
+		if strings.Contains(err.Error(), "Cannot find device") {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func read(name string) (State, error) {
@@ -117,7 +125,9 @@ func prefixToIPNet(p netip.Prefix) net.IPNet {
 
 // run formats argv into the returned error verbatim; never pass secrets.
 func run(name string, args ...string) error {
-	out, err := exec.Command(name, args...).CombinedOutput()
+	cmd := exec.Command(name, args...)
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s %v: %v: %s", name, args, err, out)
 	}

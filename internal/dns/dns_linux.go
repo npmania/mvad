@@ -68,7 +68,7 @@ func restore() error {
 	data, err := os.ReadFile(bak)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return errors.New("dns: no backup to restore")
+			return nil
 		}
 		return err
 	}

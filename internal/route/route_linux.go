@@ -36,8 +36,8 @@ func set(iface string, endpoint netip.Addr) error {
 }
 
 func unset(iface string, endpoint netip.Addr) error {
-	err4 := ip("-4", "route", "del", "default", "dev", iface)
-	err6 := ip("-6", "route", "del", "default", "dev", iface)
+	err4 := ipMissingOK("-4", "route", "del", "default", "dev", iface)
+	err6 := ipMissingOK("-6", "route", "del", "default", "dev", iface)
 	var errp error
 	if endpoint.IsValid() {
 		errp = unpin(endpoint)
@@ -59,12 +59,16 @@ func pin(addr netip.Addr) error {
 }
 
 func unpin(addr netip.Addr) error {
-	err := ip("route", "del", hostPrefix(addr))
+	return ipMissingOK("route", "del", hostPrefix(addr))
+}
+
+// ipMissingOK tolerates "already gone" so teardown stays idempotent.
+func ipMissingOK(args ...string) error {
+	err := ip(args...)
 	if err == nil {
 		return nil
 	}
 	s := err.Error()
-	// Tolerate "already gone" — make unpin idempotent.
 	if strings.Contains(s, "Cannot find device") || strings.Contains(s, "No such process") {
 		return nil
 	}
