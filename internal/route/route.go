@@ -1,9 +1,12 @@
 // Package route sets the system default route to a given interface.
 package route
 
-import "errors"
+import (
+	"errors"
+	"net/netip"
+)
 
 var ErrUnsupported = errors.New("route: unsupported platform")
 
-func Set(iface string) error   { return set(iface) }
-func Unset(iface string) error { return unset(iface) }
+func Set(iface string, endpoint netip.Addr) error   { return set(iface, endpoint) }
+func Unset(iface string, endpoint netip.Addr) error { return unset(iface, endpoint) }

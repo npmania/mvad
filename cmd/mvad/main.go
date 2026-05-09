@@ -197,6 +197,7 @@ func connect(args []string) error {
 		return err
 	}
 	cfg.LastRelay = relay.Hostname
+	cfg.LastEndpoint = netip.AddrPortFrom(relay.IPv4, 51820)
 	if err := cfg.Save(); err != nil {
 		return err
 	}
@@ -213,12 +214,12 @@ func connect(args []string) error {
 	if err := wg.Up(wcfg); err != nil {
 		return err
 	}
-	if err := route.Set(ifname); err != nil {
+	if err := route.Set(ifname, relay.IPv4); err != nil {
 		wg.Down(ifname)
 		return err
 	}
 	if err := dns.Set(mullvadDNS); err != nil {
-		route.Unset(ifname)
+		route.Unset(ifname, relay.IPv4)
 		wg.Down(ifname)
 		return err
 	}
@@ -229,7 +230,11 @@ func disconnect(args []string) error {
 	if len(args) != 0 {
 		return usagef("usage: mvad disconnect")
 	}
-	return errors.Join(dns.Restore(), route.Unset(ifname), wg.Down(ifname))
+	var endpoint netip.Addr
+	if cfg, err := config.Load(); err == nil {
+		endpoint = cfg.LastEndpoint.Addr()
+	}
+	return errors.Join(dns.Restore(), route.Unset(ifname, endpoint), wg.Down(ifname))
 }
 
 func showStatus(args []string) error {
