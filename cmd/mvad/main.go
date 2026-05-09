@@ -20,13 +20,17 @@ import (
 
 	"github.com/npmania/mvad/internal/config"
 	"github.com/npmania/mvad/internal/dns"
+	"github.com/npmania/mvad/internal/firewall"
 	"github.com/npmania/mvad/internal/mullvad"
 	"github.com/npmania/mvad/internal/route"
 	"github.com/npmania/mvad/internal/status"
 	"github.com/npmania/mvad/internal/wg"
 )
 
-const ifname = "mvad-wg0"
+const (
+	ifname        = "mvad-wg0"
+	wireguardPort = 51820
+)
 
 var mullvadDNS = []netip.Addr{netip.MustParseAddr("10.64.0.1")}
 
@@ -424,8 +428,11 @@ func connect(args []string) error {
 	if os.Geteuid() != 0 {
 		return errors.New("this command needs root; rerun with sudo")
 	}
-	if len(args) != 1 {
-		return usagef("usage: mvad connect <relay>")
+	fs := flag.NewFlagSet("connect", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	allowLAN := fs.Bool("allow-lan", false, "allow traffic to private LAN ranges")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 1 {
+		return usagef("usage: mvad connect [--allow-lan] <relay>")
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -441,12 +448,13 @@ func connect(args []string) error {
 	if err != nil {
 		return err
 	}
-	relay, err := pickRelay(cfg, args[0])
+	relay, err := pickRelay(cfg, fs.Arg(0))
 	if err != nil {
 		return err
 	}
+	endpoint := netip.AddrPortFrom(relay.IPv4, wireguardPort)
 	cfg.LastRelay = relay.Hostname
-	cfg.LastEndpoint = netip.AddrPortFrom(relay.IPv4, 51820)
+	cfg.LastEndpoint = endpoint
 	if err := cfg.Save(); err != nil {
 		return err
 	}
@@ -456,7 +464,7 @@ func connect(args []string) error {
 		Address:    cfg.DeviceIPv4,
 		Address6:   cfg.DeviceIPv6,
 		PeerKey:    relay.PublicKey,
-		Endpoint:   netip.AddrPortFrom(relay.IPv4, 51820),
+		Endpoint:   endpoint,
 		AllowedIPs: []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0")},
 		MTU:        1380,
 	}
@@ -468,6 +476,18 @@ func connect(args []string) error {
 		return err
 	}
 	if err := dns.Set(ifname, mullvadDNS); err != nil {
+		route.Unset(ifname, relay.IPv4)
+		wg.Down(ifname)
+		return err
+	}
+	fcfg := firewall.Config{
+		Iface:    ifname,
+		Endpoint: endpoint,
+		DNS:      mullvadDNS,
+		AllowLAN: *allowLAN,
+	}
+	if err := firewall.Up(fcfg); err != nil {
+		dns.Restore(ifname)
 		route.Unset(ifname, relay.IPv4)
 		wg.Down(ifname)
 		return err
@@ -486,7 +506,7 @@ func disconnect(args []string) error {
 	if cfg, err := config.Load(); err == nil {
 		endpoint = cfg.LastEndpoint.Addr()
 	}
-	return errors.Join(dns.Restore(ifname), route.Unset(ifname, endpoint), wg.Down(ifname))
+	return errors.Join(firewall.Down(), dns.Restore(ifname), route.Unset(ifname, endpoint), wg.Down(ifname))
 }
 
 func showStatus(args []string) error {
