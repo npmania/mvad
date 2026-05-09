@@ -52,7 +52,7 @@ func writeToken(t *testing.T, w http.ResponseWriter, value string) {
 
 func TestRelays(t *testing.T) {
 	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "GET" || r.URL.Path != "/app/v1/relays" {
+		if r.Method != "GET" || r.URL.Path != "/www/relays/all" {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
 		w.Write(fixture(t, "relays.json"))
@@ -68,7 +68,7 @@ func TestRelays(t *testing.T) {
 	if se.Hostname != "se-sto-wg-001" || se.Country != "Sweden" || se.City != "Stockholm" {
 		t.Errorf("relay[0] = %+v", se)
 	}
-	if !se.Active || !se.Owned || se.Provider != "31173" || se.Weight != 100 {
+	if !se.Active || !se.Owned || se.Provider != "31173" || se.MultihopPort != 3001 {
 		t.Errorf("relay[0] flags = %+v", se)
 	}
 	if se.IPv4.String() != "185.213.154.66" || se.IPv6.String() != "2a03:1b20:5:f011::a01f" {

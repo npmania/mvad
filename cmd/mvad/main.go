@@ -431,8 +431,9 @@ func connect(args []string) error {
 	fs := flag.NewFlagSet("connect", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	allowLAN := fs.Bool("allow-lan", false, "allow traffic to private LAN ranges")
+	via := fs.String("via", "", "entry relay for multihop")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 1 {
-		return usagef("usage: mvad connect [--allow-lan] <relay>")
+		return usagef("usage: mvad connect [--allow-lan] [--via <entry>] <relay>")
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -448,12 +449,25 @@ func connect(args []string) error {
 	if err != nil {
 		return err
 	}
-	relay, err := pickRelay(cfg, fs.Arg(0))
+	exit, err := pickRelay(cfg, fs.Arg(0))
 	if err != nil {
 		return err
 	}
-	endpoint := netip.AddrPortFrom(relay.IPv4, wireguardPort)
-	cfg.LastRelay = relay.Hostname
+	endpoint := netip.AddrPortFrom(exit.IPv4, wireguardPort)
+	entryHost := ""
+	if *via != "" {
+		entry, err := pickRelay(cfg, *via)
+		if err != nil {
+			return err
+		}
+		if exit.MultihopPort == 0 {
+			return fmt.Errorf("relay %q has no multihop port", exit.Hostname)
+		}
+		endpoint = netip.AddrPortFrom(entry.IPv4, exit.MultihopPort)
+		entryHost = entry.Hostname
+	}
+	cfg.LastRelay = exit.Hostname
+	cfg.LastEntryRelay = entryHost
 	cfg.LastEndpoint = endpoint
 	if err := cfg.Save(); err != nil {
 		return err
@@ -463,7 +477,7 @@ func connect(args []string) error {
 		PrivateKey: priv,
 		Address:    cfg.DeviceIPv4,
 		Address6:   cfg.DeviceIPv6,
-		PeerKey:    relay.PublicKey,
+		PeerKey:    exit.PublicKey,
 		Endpoint:   endpoint,
 		AllowedIPs: []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0")},
 		MTU:        1380,
@@ -471,12 +485,12 @@ func connect(args []string) error {
 	if err := wg.Up(wcfg); err != nil {
 		return err
 	}
-	if err := route.Set(ifname, relay.IPv4); err != nil {
+	if err := route.Set(ifname, endpoint.Addr()); err != nil {
 		wg.Down(ifname)
 		return err
 	}
 	if err := dns.Set(ifname, mullvadDNS); err != nil {
-		route.Unset(ifname, relay.IPv4)
+		route.Unset(ifname, endpoint.Addr())
 		wg.Down(ifname)
 		return err
 	}
@@ -488,7 +502,7 @@ func connect(args []string) error {
 	}
 	if err := firewall.Up(fcfg); err != nil {
 		dns.Restore(ifname)
-		route.Unset(ifname, relay.IPv4)
+		route.Unset(ifname, endpoint.Addr())
 		wg.Down(ifname)
 		return err
 	}
@@ -526,6 +540,7 @@ func showStatus(args []string) error {
 		return err
 	}
 	s.Relay = cfg.LastRelay
+	s.Entry = cfg.LastEntryRelay
 	fmt.Print(status.Plain(s))
 	return nil
 }

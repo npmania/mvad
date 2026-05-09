@@ -52,16 +52,16 @@ func New() *Client {
 }
 
 type Relay struct {
-	Hostname  string
-	Country   string
-	City      string
-	IPv4      netip.Addr
-	IPv6      netip.Addr
-	PublicKey wgtypes.Key
-	Provider  string
-	Owned     bool
-	Active    bool
-	Weight    int
+	Hostname     string
+	Country      string
+	City         string
+	IPv4         netip.Addr
+	IPv6         netip.Addr
+	PublicKey    wgtypes.Key
+	Provider     string
+	Owned        bool
+	Active       bool
+	MultihopPort uint16
 }
 
 type Device struct {
@@ -87,36 +87,32 @@ func (e *APIError) Error() string {
 }
 
 func (c *Client) Relays(ctx context.Context) ([]Relay, error) {
-	var raw struct {
-		Locations map[string]struct {
-			Country string `json:"country"`
-			City    string `json:"city"`
-		} `json:"locations"`
-		WireGuard struct {
-			Relays []struct {
-				Hostname   string `json:"hostname"`
-				Location   string `json:"location"`
-				Active     bool   `json:"active"`
-				Owned      bool   `json:"owned"`
-				Provider   string `json:"provider"`
-				Weight     int    `json:"weight"`
-				IPv4AddrIn string `json:"ipv4_addr_in"`
-				IPv6AddrIn string `json:"ipv6_addr_in"`
-				PublicKey  string `json:"public_key"`
-			} `json:"relays"`
-		} `json:"wireguard"`
+	var raw []struct {
+		Type         string `json:"type"`
+		Hostname     string `json:"hostname"`
+		CountryName  string `json:"country_name"`
+		CityName     string `json:"city_name"`
+		Active       bool   `json:"active"`
+		Owned        bool   `json:"owned"`
+		Provider     string `json:"provider"`
+		IPv4AddrIn   string `json:"ipv4_addr_in"`
+		IPv6AddrIn   string `json:"ipv6_addr_in"`
+		Pubkey       string `json:"pubkey"`
+		MultihopPort uint16 `json:"multihop_port"`
 	}
-	req, err := c.newRequest(ctx, "GET", "/app/v1/relays", nil)
+	req, err := c.newRequest(ctx, "GET", "/www/relays/all", nil)
 	if err != nil {
 		return nil, err
 	}
 	if err := c.do(req, &raw); err != nil {
 		return nil, err
 	}
-	out := make([]Relay, 0, len(raw.WireGuard.Relays))
-	for _, r := range raw.WireGuard.Relays {
-		loc := raw.Locations[r.Location]
-		key, err := wgtypes.ParseKey(r.PublicKey)
+	out := make([]Relay, 0, len(raw))
+	for _, r := range raw {
+		if r.Type != "wireguard" {
+			continue
+		}
+		key, err := wgtypes.ParseKey(r.Pubkey)
 		if err != nil {
 			return nil, fmt.Errorf("mullvad: relay %s: %w", r.Hostname, err)
 		}
@@ -132,16 +128,16 @@ func (c *Client) Relays(ctx context.Context) ([]Relay, error) {
 			}
 		}
 		out = append(out, Relay{
-			Hostname:  r.Hostname,
-			Country:   loc.Country,
-			City:      loc.City,
-			IPv4:      ip4,
-			IPv6:      ip6,
-			PublicKey: key,
-			Provider:  r.Provider,
-			Owned:     r.Owned,
-			Active:    r.Active,
-			Weight:    r.Weight,
+			Hostname:     r.Hostname,
+			Country:      r.CountryName,
+			City:         r.CityName,
+			IPv4:         ip4,
+			IPv6:         ip6,
+			PublicKey:    key,
+			Provider:     r.Provider,
+			Owned:        r.Owned,
+			Active:       r.Active,
+			MultihopPort: r.MultihopPort,
 		})
 	}
 	return out, nil

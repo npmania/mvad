@@ -18,6 +18,7 @@ type Snapshot struct {
 	PeerKey       wgtypes.Key
 	PeerEndpoint  netip.AddrPort
 	Relay         string
+	Entry         string
 	RxBytes       int64
 	TxBytes       int64
 	LastHandshake time.Time
@@ -38,10 +39,14 @@ func Plain(s Snapshot) string {
 	if name == "" {
 		name = s.PeerEndpoint.String()
 	}
-	if s.LastHandshake.IsZero() {
-		return fmt.Sprintf("connected to %s, no handshake yet\n", name)
+	via := ""
+	if s.Entry != "" {
+		via = " via " + s.Entry
 	}
-	return fmt.Sprintf("connected to %s, last handshake %s ago\n", name, humanDuration(time.Since(s.LastHandshake)))
+	if s.LastHandshake.IsZero() {
+		return fmt.Sprintf("connected to %s%s, no handshake yet\n", name, via)
+	}
+	return fmt.Sprintf("connected to %s%s, last handshake %s ago\n", name, via, humanDuration(time.Since(s.LastHandshake)))
 }
 
 func humanDuration(d time.Duration) string {

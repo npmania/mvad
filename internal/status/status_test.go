@@ -35,6 +35,20 @@ func TestPlainConnected(t *testing.T) {
 	}
 }
 
+func TestPlainMultihop(t *testing.T) {
+	s := Snapshot{
+		Up:            true,
+		Relay:         "us-nyc-wg-001",
+		Entry:         "se-mma-wg-002",
+		LastHandshake: time.Now().Add(-3 * time.Second),
+	}
+	got := Plain(s)
+	want := "connected to us-nyc-wg-001 via se-mma-wg-002, last handshake 3s ago\n"
+	if got != want {
+		t.Errorf("Plain = %q, want %q", got, want)
+	}
+}
+
 func TestPlainEmptyRelayFallback(t *testing.T) {
 	s := Snapshot{
 		Up:           true,
