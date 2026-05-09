@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net/netip"
 	"os"
+	"os/user"
 	"path/filepath"
 	"time"
 )
@@ -24,15 +25,27 @@ type Config struct {
 }
 
 func path() (string, error) {
-	dir := os.Getenv("XDG_CONFIG_HOME")
-	if dir == "" {
-		home, err := os.UserHomeDir()
+	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
+		return filepath.Join(dir, "mvad", "config.json"), nil
+	}
+	var home string
+	if os.Geteuid() == 0 {
+		if name := os.Getenv("SUDO_USER"); name != "" {
+			u, err := user.Lookup(name)
+			if err != nil {
+				return "", err
+			}
+			home = u.HomeDir
+		}
+	}
+	if home == "" {
+		h, err := os.UserHomeDir()
 		if err != nil {
 			return "", err
 		}
-		dir = filepath.Join(home, ".config")
+		home = h
 	}
-	return filepath.Join(dir, "mvad", "config.json"), nil
+	return filepath.Join(home, ".config", "mvad", "config.json"), nil
 }
 
 func Load() (*Config, error) {

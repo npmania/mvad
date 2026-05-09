@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"os"
+	"os/user"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -125,6 +126,46 @@ func TestPathFallsBackToHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", home)
+	p, err := path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, ".config", "mvad", "config.json"); p != want {
+		t.Errorf("Path = %q, want %q", p, want)
+	}
+}
+
+func TestPathSudoUserRedirectsToInvokerHome(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root")
+	}
+	name := os.Getenv("SUDO_USER")
+	if name == "" {
+		t.Skip("SUDO_USER not set")
+	}
+	u, err := user.Lookup(name)
+	if err != nil {
+		t.Fatalf("user.Lookup(%q): %v", name, err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "/root")
+	p, err := path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(u.HomeDir, ".config", "mvad", "config.json"); p != want {
+		t.Errorf("Path = %q, want %q", p, want)
+	}
+}
+
+func TestPathIgnoresSudoUserWhenNotRoot(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("requires non-root")
+	}
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", home)
+	t.Setenv("SUDO_USER", "nonexistent-user")
 	p, err := path()
 	if err != nil {
 		t.Fatal(err)
