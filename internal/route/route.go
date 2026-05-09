@@ -5,5 +5,5 @@ import "errors"
 
 var ErrUnsupported = errors.New("route: unsupported platform")
 
-func Set(iface string) error { return set(iface) }
-func Unset() error           { return unset() }
+func Set(iface string) error   { return set(iface) }
+func Unset(iface string) error { return unset(iface) }

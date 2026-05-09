@@ -218,7 +218,7 @@ func connect(args []string) error {
 		return err
 	}
 	if err := dns.Set(mullvadDNS); err != nil {
-		route.Unset()
+		route.Unset(ifname)
 		wg.Down(ifname)
 		return err
 	}
@@ -229,7 +229,7 @@ func disconnect(args []string) error {
 	if len(args) != 0 {
 		return usagef("usage: mvad disconnect")
 	}
-	return errors.Join(dns.Restore(), route.Unset(), wg.Down(ifname))
+	return errors.Join(dns.Restore(), route.Unset(ifname), wg.Down(ifname))
 }
 
 func showStatus(args []string) error {

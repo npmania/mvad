@@ -2,5 +2,5 @@
 
 package route
 
-func set(string) error { return ErrUnsupported }
-func unset() error     { return ErrUnsupported }
+func set(string) error   { return ErrUnsupported }
+func unset(string) error { return ErrUnsupported }
