@@ -265,6 +265,9 @@ func devicesRemove(cfg *config.Config, args []string) error {
 	if len(args) != 1 {
 		return usagef("usage: mvad devices remove <id>")
 	}
+	if args[0] == cfg.DeviceID {
+		return errors.New("this is your current device; use mvad logout")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	err := mullvad.New().RevokeDevice(ctx, cfg.AccountToken, args[0])
