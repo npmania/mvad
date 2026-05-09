@@ -1,0 +1,9 @@
+{
+  "id": "d-abc-123",
+  "name": "happy-octopus",
+  "pubkey": "BLNHNoGO88LjV/wDBa7CUUwUzPq/fO2UwcGLy56hKy4=",
+  "ipv4_address": "10.64.0.5/32",
+  "ipv6_address": "fc00:bbbb:bbbb:bb01::4:5/128",
+  "hijack_dns": false,
+  "created": "2026-01-02T03:04:05Z"
+}

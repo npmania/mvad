@@ -1,0 +1,262 @@
+package mullvad
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
+)
+
+func fixture(t *testing.T, name string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func newClient(t *testing.T, h http.Handler) *Client {
+	t.Helper()
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	c := New()
+	c.BaseURL = srv.URL
+	return c
+}
+
+func writeJSON(t *testing.T, w http.ResponseWriter, v any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeToken(t *testing.T, w http.ResponseWriter, value string) {
+	writeJSON(t, w, map[string]any{
+		"access_token": value,
+		"expiry":       time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+	})
+}
+
+func TestRelays(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" || r.URL.Path != "/app/v1/relays" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		w.Write(fixture(t, "relays.json"))
+	}))
+	rs, err := c.Relays(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rs) != 2 {
+		t.Fatalf("got %d relays, want 2", len(rs))
+	}
+	se := rs[0]
+	if se.Hostname != "se-sto-wg-001" || se.Country != "Sweden" || se.City != "Stockholm" {
+		t.Errorf("relay[0] = %+v", se)
+	}
+	if !se.Active || !se.Owned || se.Provider != "31173" || se.Weight != 100 {
+		t.Errorf("relay[0] flags = %+v", se)
+	}
+	if se.IPv4.String() != "185.213.154.66" || se.IPv6.String() != "2a03:1b20:5:f011::a01f" {
+		t.Errorf("relay[0] addrs = %v %v", se.IPv4, se.IPv6)
+	}
+	if se.PublicKey.String() != "BLNHNoGO88LjV/wDBa7CUUwUzPq/fO2UwcGLy56hKy4=" {
+		t.Errorf("relay[0] key = %s", se.PublicKey)
+	}
+	us := rs[1]
+	if us.Hostname != "us-nyc-wg-301" || us.Active || us.Owned {
+		t.Errorf("relay[1] = %+v", us)
+	}
+	if us.IPv6.IsValid() {
+		t.Errorf("relay[1] ipv6 should be zero, got %v", us.IPv6)
+	}
+}
+
+func TestAccountExpiry(t *testing.T) {
+	var tokenCalls atomic.Int32
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/auth/v1/token":
+			tokenCalls.Add(1)
+			var req struct {
+				AccountNumber string `json:"account_number"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatal(err)
+			}
+			if req.AccountNumber != "1234567890123456" {
+				t.Errorf("account_number = %q", req.AccountNumber)
+			}
+			writeToken(t, w, "mva_test_xyz")
+		case "/accounts/v1/accounts/me":
+			if got := r.Header.Get("Authorization"); got != "Bearer mva_test_xyz" {
+				t.Errorf("Authorization = %q", got)
+			}
+			w.Write(fixture(t, "account_me.json"))
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	exp, err := c.AccountExpiry(context.Background(), "1234567890123456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := time.Parse(time.RFC3339, "2026-12-01T00:00:00Z")
+	if !exp.Equal(want) {
+		t.Errorf("expiry = %v, want %v", exp, want)
+	}
+	if _, err := c.AccountExpiry(context.Background(), "1234567890123456"); err != nil {
+		t.Fatal(err)
+	}
+	if got := tokenCalls.Load(); got != 1 {
+		t.Errorf("token exchanges = %d, want 1 (cached)", got)
+	}
+}
+
+func TestRegisterDevice(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/auth/v1/token":
+			writeToken(t, w, "tok1")
+		case "/accounts/v1/devices":
+			if r.Method != "POST" {
+				t.Errorf("method = %s", r.Method)
+			}
+			body, _ := io.ReadAll(r.Body)
+			var req struct {
+				PubKey    string `json:"pubkey"`
+				HijackDNS bool   `json:"hijack_dns"`
+			}
+			if err := json.Unmarshal(body, &req); err != nil {
+				t.Fatalf("body %q: %v", body, err)
+			}
+			if req.PubKey != "BLNHNoGO88LjV/wDBa7CUUwUzPq/fO2UwcGLy56hKy4=" {
+				t.Errorf("pubkey = %q", req.PubKey)
+			}
+			if req.HijackDNS {
+				t.Errorf("hijack_dns should be false")
+			}
+			w.Write(fixture(t, "device.json"))
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	pub, err := wgtypes.ParseKey("BLNHNoGO88LjV/wDBa7CUUwUzPq/fO2UwcGLy56hKy4=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev, err := c.RegisterDevice(context.Background(), "acct", pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dev.ID != "d-abc-123" || dev.Name != "happy-octopus" {
+		t.Errorf("dev = %+v", dev)
+	}
+	if dev.IPv4.String() != "10.64.0.5/32" {
+		t.Errorf("ipv4 = %v", dev.IPv4)
+	}
+	if dev.IPv6.String() != "fc00:bbbb:bbbb:bb01::4:5/128" {
+		t.Errorf("ipv6 = %v", dev.IPv6)
+	}
+	if dev.PublicKey != pub {
+		t.Errorf("pubkey roundtrip failed")
+	}
+}
+
+func TestRevokeDevice(t *testing.T) {
+	var deletes atomic.Int32
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/auth/v1/token":
+			writeToken(t, w, "tok2")
+		case "/accounts/v1/devices/d-abc-123":
+			if r.Method != "DELETE" {
+				t.Errorf("method = %s", r.Method)
+			}
+			if got := r.Header.Get("Authorization"); got != "Bearer tok2" {
+				t.Errorf("Authorization = %q", got)
+			}
+			deletes.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	if err := c.RevokeDevice(context.Background(), "acct", "d-abc-123"); err != nil {
+		t.Fatal(err)
+	}
+	if deletes.Load() != 1 {
+		t.Errorf("deletes = %d", deletes.Load())
+	}
+}
+
+func TestUnauthorizedRetry(t *testing.T) {
+	var tokenCalls, meCalls atomic.Int32
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/auth/v1/token":
+			n := tokenCalls.Add(1)
+			writeToken(t, w, "tok-"+strings.Repeat("x", int(n)))
+		case "/accounts/v1/accounts/me":
+			n := meCalls.Add(1)
+			if n == 1 {
+				w.WriteHeader(http.StatusUnauthorized)
+				w.Write([]byte(`{"code":"INVALID_ACCESS_TOKEN","detail":"stale"}`))
+				return
+			}
+			if got := r.Header.Get("Authorization"); got != "Bearer tok-xx" {
+				t.Errorf("retry Authorization = %q", got)
+			}
+			w.Write(fixture(t, "account_me.json"))
+		}
+	}))
+	if _, err := c.AccountExpiry(context.Background(), "acct"); err != nil {
+		t.Fatal(err)
+	}
+	if tokenCalls.Load() != 2 {
+		t.Errorf("token exchanges = %d, want 2", tokenCalls.Load())
+	}
+	if meCalls.Load() != 2 {
+		t.Errorf("me calls = %d, want 2", meCalls.Load())
+	}
+}
+
+func TestUnauthorizedRetryGivesUp(t *testing.T) {
+	var meCalls atomic.Int32
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/auth/v1/token":
+			writeToken(t, w, "tok")
+		case "/accounts/v1/accounts/me":
+			meCalls.Add(1)
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"code":"INVALID_ACCESS_TOKEN","detail":"nope"}`))
+		}
+	}))
+	_, err := c.AccountExpiry(context.Background(), "acct")
+	if err == nil {
+		t.Fatal("want error")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != 401 {
+		t.Fatalf("err = %v", err)
+	}
+	if meCalls.Load() != 2 {
+		t.Errorf("me calls = %d, want 2", meCalls.Load())
+	}
+}

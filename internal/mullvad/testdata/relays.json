@@ -1,0 +1,32 @@
+{
+  "locations": {
+    "se-sto": {"country": "Sweden", "city": "Stockholm", "latitude": 59.32, "longitude": 18.06},
+    "us-nyc": {"country": "USA", "city": "New York, NY", "latitude": 40.71, "longitude": -74.00}
+  },
+  "wireguard": {
+    "relays": [
+      {
+        "hostname": "se-sto-wg-001",
+        "location": "se-sto",
+        "active": true,
+        "owned": true,
+        "provider": "31173",
+        "weight": 100,
+        "ipv4_addr_in": "185.213.154.66",
+        "ipv6_addr_in": "2a03:1b20:5:f011::a01f",
+        "public_key": "BLNHNoGO88LjV/wDBa7CUUwUzPq/fO2UwcGLy56hKy4="
+      },
+      {
+        "hostname": "us-nyc-wg-301",
+        "location": "us-nyc",
+        "active": false,
+        "owned": false,
+        "provider": "M247",
+        "weight": 50,
+        "ipv4_addr_in": "193.32.127.66",
+        "ipv6_addr_in": "",
+        "public_key": "kGVf1Y7RmkUyKvCyYy0FPQ7cb89vUQTH2yUlF8PzLk0="
+      }
+    ]
+  }
+}
