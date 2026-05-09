@@ -12,6 +12,7 @@ import (
 	"os"
 	"runtime/debug"
 	"sort"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -329,9 +330,47 @@ func rotateKey(args []string) error {
 	return nil
 }
 
+type stringList []string
+
+func (s *stringList) String() string     { return strings.Join(*s, ",") }
+func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
+
+func matchesAny(list []string, v string) bool {
+	if len(list) == 0 {
+		return true
+	}
+	for _, x := range list {
+		if strings.EqualFold(x, v) {
+			return true
+		}
+	}
+	return false
+}
+
 func listRelays(args []string) error {
-	if len(args) != 0 {
-		return usagef("usage: mvad relays")
+	fs := flag.NewFlagSet("relays", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var country, city, provider stringList
+	fs.Var(&country, "country", "filter by country (repeatable)")
+	fs.Var(&city, "city", "filter by city (repeatable)")
+	fs.Var(&provider, "provider", "filter by provider (repeatable)")
+	owned := fs.String("owned", "", "filter by owned: true or false")
+	protocol := fs.String("protocol", "", "filter by protocol: wireguard")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+		return usagef("usage: mvad relays [--country C]... [--city C]... [--provider P]... [--owned true|false] [--protocol wireguard]")
+	}
+	var wantOwned, filterOwned bool
+	switch *owned {
+	case "":
+	case "true":
+		wantOwned, filterOwned = true, true
+	case "false":
+		wantOwned, filterOwned = false, true
+	default:
+		return usagef("--owned must be true or false")
+	}
+	if *protocol != "" && !strings.EqualFold(*protocol, "wireguard") {
+		return usagef("--protocol: only wireguard is supported")
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -362,6 +401,18 @@ func listRelays(args []string) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	for _, r := range relays {
 		if !r.Active {
+			continue
+		}
+		if !matchesAny(country, r.Country) {
+			continue
+		}
+		if !matchesAny(city, r.City) {
+			continue
+		}
+		if !matchesAny(provider, r.Provider) {
+			continue
+		}
+		if filterOwned && r.Owned != wantOwned {
 			continue
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", r.Hostname, r.Country, r.City, r.IPv4, r.Provider)
