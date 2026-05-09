@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"net/netip"
 	"os"
@@ -32,7 +33,7 @@ const usageText = `usage: mvad <command> [arguments]
 
 The commands are:
 
-	login       store a Mullvad account number
+	login       log in to a Mullvad account
 	logout      revoke this device and clear stored credentials
 	devices     list or remove devices on this account
 	relays      list relays
@@ -107,10 +108,13 @@ func versionString() string {
 }
 
 func login(args []string) error {
-	if len(args) != 1 {
-		return usagef("usage: mvad login <token>")
+	fs := flag.NewFlagSet("login", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	keyFlag := fs.String("key", "", "base64 wireguard private key of an existing device to import")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 1 {
+		return usagef("usage: mvad login [--key <base64-privkey>] <token>")
 	}
-	token := args[0]
+	token := fs.Arg(0)
 	if len(token) != 16 {
 		return fmt.Errorf("invalid account token: must be 16 digits")
 	}
@@ -124,6 +128,9 @@ func login(args []string) error {
 	c := mullvad.New()
 	if _, err := c.AccountExpiry(ctx, token); err != nil {
 		return err
+	}
+	if *keyFlag != "" {
+		return loginImport(ctx, c, token, *keyFlag)
 	}
 	priv, err := wgtypes.GeneratePrivateKey()
 	if err != nil {
@@ -147,6 +154,34 @@ func login(args []string) error {
 		return errors.Join(err, revokeErr)
 	}
 	return nil
+}
+
+func loginImport(ctx context.Context, c *mullvad.Client, token, keyStr string) error {
+	priv, err := wgtypes.ParseKey(keyStr)
+	if err != nil {
+		return err
+	}
+	devs, err := c.ListDevices(ctx, token)
+	if err != nil {
+		return err
+	}
+	pub := priv.PublicKey()
+	for _, d := range devs {
+		if d.PublicKey != pub {
+			continue
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		cfg.AccountToken = token
+		cfg.DeviceID = d.ID
+		cfg.PrivateKey = priv.String()
+		cfg.DeviceIPv4 = d.IPv4
+		cfg.DeviceIPv6 = d.IPv6
+		return cfg.Save()
+	}
+	return errors.New("no device matching that key on this account")
 }
 
 func logout(args []string) error {
