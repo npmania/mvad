@@ -113,6 +113,12 @@ type state struct {
 	logout                             widget.Clickable
 	logoutArmed                        time.Time
 
+	loginToken widget.Editor
+	loginBtn   widget.Clickable
+	signupBtn  widget.Clickable
+	loginErr   string
+	signupOut  string
+
 	splitList    widget.List
 	splitRefresh widget.Clickable
 	addPID       widget.Editor
@@ -158,6 +164,7 @@ func run(w *app.Window) error {
 	st.addPID.SingleLine = true
 	st.addPID.Submit = true
 	st.runCmdEd.SingleLine = true
+	st.loginToken.SingleLine = true
 
 	cfg, err := config.Load()
 	if err != nil || cfg == nil {
@@ -216,6 +223,20 @@ func run(w *app.Window) error {
 					if c, err := config.Load(); err == nil && c != nil {
 						st.cfg = c
 					}
+				}
+			case "login":
+				if r.err == nil {
+					if c, err := config.Load(); err == nil && c != nil {
+						st.cfg = c
+					}
+					st.loginToken.SetText("")
+				}
+			case "signup":
+				if r.err == nil {
+					if c, err := config.Load(); err == nil && c != nil {
+						st.cfg = c
+					}
+					st.signupOut = strings.TrimSpace(r.out)
 				}
 			case "split":
 				if !st.splitLoading {
@@ -392,6 +413,26 @@ func run(w *app.Window) error {
 					args = append(args, "--", st.selected)
 					go runCmd(ctx, w, cmdDone, args...)
 				}
+			}
+			if !st.running && st.loginBtn.Clicked(gtx) {
+				token := strings.TrimSpace(st.loginToken.Text())
+				if token == "" {
+					st.loginErr = "enter account number"
+				} else {
+					st.loginErr = ""
+					st.cmdErr = nil
+					st.cmdOut = ""
+					st.running = true
+					st.runningName = "login"
+					go runCmd(ctx, w, cmdDone, "login", "--", token)
+				}
+			}
+			if !st.running && st.signupBtn.Clicked(gtx) {
+				st.cmdErr = nil
+				st.cmdOut = ""
+				st.running = true
+				st.runningName = "signup"
+				go runCmd(ctx, w, cmdDone, "signup")
 			}
 			if !st.running && st.logout.Clicked(gtx) {
 				if !st.logoutArmed.IsZero() && time.Since(st.logoutArmed) < 5*time.Second {
@@ -732,72 +773,14 @@ func togglePill(gtx layout.Context, b *widget.Bool, pal palette) layout.Dimensio
 }
 
 func accountBody(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
-	cfg := st.cfg
-	loggedIn := cfg.DeviceID != ""
-
-	var children []layout.FlexChild
-	if !loggedIn {
-		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			lbl := material.Label(th, unit.Sp(13), "no account on this device")
-			lbl.Color = pal.muted
-			return lbl.Layout(gtx)
-		}),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
-		)
-	} else {
-		expText := "expiry unknown"
-		if !cfg.AccountExpiry.IsZero() {
-			if time.Until(cfg.AccountExpiry) <= 0 {
-				expText = "account expired"
-			} else {
-				expText = "expires " + status.HumanExpiry(cfg.AccountExpiry)
-			}
-		}
-		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			lbl := material.Label(th, unit.Sp(14), expText)
-			lbl.Color = pal.fg
-			return lbl.Layout(gtx)
-		}))
-		if cfg.DeviceName != "" {
-			children = append(children,
-				layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					lbl := material.Label(th, unit.Sp(13), "device  "+cfg.DeviceName)
-					lbl.Color = pal.muted
-					return lbl.Layout(gtx)
-				}),
-			)
-		}
-		children = append(children,
-			layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return hairline(gtx, pal.dim)
-			}),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
-		)
+	if strings.TrimSpace(st.loginToken.Text()) != "" {
+		st.loginErr = ""
 	}
-	children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-		return st.openAcct.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			lbl := material.Label(th, unit.Sp(14), "Open account page ↗")
-			lbl.Color = pal.accent
-			return lbl.Layout(gtx)
-		})
-	}))
-	if loggedIn {
-		label := "Logout"
-		if !st.logoutArmed.IsZero() && time.Since(st.logoutArmed) < 5*time.Second {
-			label = "Confirm?"
-		}
-		children = append(children,
-			layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return hairline(gtx, pal.dim)
-			}),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(28)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return actionButton(gtx, th, &st.logout, pal, label, st.running, st.runningName == "logout")
-			}),
-		)
+	var children []layout.FlexChild
+	if st.cfg.DeviceID != "" {
+		children = accountInfoRows(th, st, pal)
+	} else {
+		children = accountSignInRows(th, st, pal)
 	}
 	children = append(children,
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
@@ -808,6 +791,113 @@ func accountBody(gtx layout.Context, th *material.Theme, st *state, pal palette)
 		}),
 	)
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+}
+
+func accountInfoRows(th *material.Theme, st *state, pal palette) []layout.FlexChild {
+	cfg := st.cfg
+	expText := "expiry unknown"
+	if !cfg.AccountExpiry.IsZero() {
+		if time.Until(cfg.AccountExpiry) <= 0 {
+			expText = "account expired"
+		} else {
+			expText = "expires " + status.HumanExpiry(cfg.AccountExpiry)
+		}
+	}
+	children := []layout.FlexChild{
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Label(th, unit.Sp(14), expText)
+			lbl.Color = pal.fg
+			return lbl.Layout(gtx)
+		}),
+	}
+	if cfg.DeviceName != "" {
+		children = append(children,
+			layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Label(th, unit.Sp(13), "device  "+cfg.DeviceName)
+				lbl.Color = pal.muted
+				return lbl.Layout(gtx)
+			}),
+		)
+	}
+	logoutLabel := "Logout"
+	if !st.logoutArmed.IsZero() && time.Since(st.logoutArmed) < 5*time.Second {
+		logoutLabel = "Confirm?"
+	}
+	children = append(children,
+		layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return hairline(gtx, pal.dim)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return st.openAcct.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Label(th, unit.Sp(14), "Open account page ↗")
+				lbl.Color = pal.accent
+				return lbl.Layout(gtx)
+			})
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return hairline(gtx, pal.dim)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(28)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return actionButton(gtx, th, &st.logout, pal, logoutLabel, st.running, st.runningName == "logout")
+		}),
+	)
+	return children
+}
+
+func accountSignInRows(th *material.Theme, st *state, pal palette) []layout.FlexChild {
+	loginDisabled := strings.TrimSpace(st.loginToken.Text()) == "" || st.running
+	children := []layout.FlexChild{
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Label(th, unit.Sp(16), "not signed in")
+			lbl.Color = pal.muted
+			return lbl.Layout(gtx)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return splitEditor(gtx, th, &st.loginToken, pal, "Account number")
+		}),
+	}
+	if st.loginErr != "" {
+		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Label(th, unit.Sp(12), st.loginErr)
+				lbl.Color = pal.errFg
+				return lbl.Layout(gtx)
+			})
+		}))
+	}
+	children = append(children,
+		layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return actionButton(gtx, th, &st.loginBtn, pal, "Login", loginDisabled, st.runningName == "login")
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(24)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return hairline(gtx, pal.dim)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(24)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return actionButton(gtx, th, &st.signupBtn, pal, "Sign up", st.running, st.runningName == "signup")
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(24)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return hairline(gtx, pal.dim)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(24)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return st.openAcct.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Label(th, unit.Sp(14), "Open account page ↗")
+				lbl.Color = pal.accent
+				return lbl.Layout(gtx)
+			})
+		}),
+	)
+	return children
 }
 
 func hairline(gtx layout.Context, c color.NRGBA) layout.Dimensions {
@@ -1115,6 +1205,9 @@ func footer(gtx layout.Context, th *material.Theme, st *state, pal palette) layo
 		c    color.NRGBA
 	}
 	var lines []line
+	if st.signupOut != "" {
+		lines = append(lines, line{text: "new account " + st.signupOut, c: pal.muted})
+	}
 	if st.running {
 		lines = append(lines, line{text: "running…", c: pal.muted})
 	}
