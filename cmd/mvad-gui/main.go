@@ -218,6 +218,7 @@ type state struct {
 	loginBtn   widget.Clickable
 	signupBtn  widget.Clickable
 	loginErr   string
+	loginAtCap bool
 	signupOut  string
 
 	viaEntry widget.Editor
@@ -585,6 +586,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 					}
 					st.loginToken.SetText("")
 					st.loginKey.SetText("")
+					st.loginAtCap = false
 					st.devices = nil
 					st.devicesLoaded = false
 					st.devicesErr = ""
@@ -592,6 +594,27 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 						st.acctRefreshing = true
 						st.acctRefreshErr = ""
 						go loadAccount(st.ctx, w, st.acctDone)
+					}
+				} else {
+					var ee *exec.ExitError
+					if errors.As(r.err, &ee) && ee.ExitCode() == 3 {
+						st.loginAtCap = true
+						st.cmdErr = nil
+						st.cmdOut = ""
+						st.devices = nil
+						st.devicesLoaded = false
+						st.devicesErr = ""
+						token := strings.TrimSpace(st.loginToken.Text())
+						if token != "" && !st.acctRefreshing {
+							st.acctRefreshing = true
+							st.acctRefreshErr = ""
+							go loadDevicesByToken(st.ctx, w, st.acctDone, token)
+						}
+					} else {
+						st.loginAtCap = false
+						st.devices = nil
+						st.devicesLoaded = false
+						st.devicesErr = ""
 					}
 				}
 			case "signup":
@@ -693,10 +716,18 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 				st.devicesErr = ""
 				delete(st.deviceClicks, r.id)
 				delete(st.deviceArmed, r.id)
-				if !st.acctRefreshing && st.cfg.AccountToken != "" {
-					st.acctRefreshing = true
-					st.acctRefreshErr = ""
-					go loadAccount(st.ctx, w, st.acctDone)
+				if !st.acctRefreshing {
+					if st.cfg.AccountToken != "" {
+						st.acctRefreshing = true
+						st.acctRefreshErr = ""
+						go loadAccount(st.ctx, w, st.acctDone)
+					} else if st.loginAtCap {
+						if token := strings.TrimSpace(st.loginToken.Text()); token != "" {
+							st.acctRefreshing = true
+							st.acctRefreshErr = ""
+							go loadDevicesByToken(st.ctx, w, st.acctDone, token)
+						}
+					}
 				}
 			}
 		case c := <-trayCmds:
@@ -1017,7 +1048,11 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 				st.acctRefreshErr = ""
 				go loadAccount(st.ctx, w, st.acctDone)
 			}
-			if st.cfg.AccountToken != "" {
+			token := st.cfg.AccountToken
+			if token == "" && st.loginAtCap {
+				token = strings.TrimSpace(st.loginToken.Text())
+			}
+			if token != "" {
 				now := time.Now()
 				for _, d := range st.devices {
 					if d.ID == st.cfg.DeviceID {
@@ -1036,7 +1071,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 						if st.deviceRemoving == "" {
 							st.deviceRemoving = d.ID
 							st.devicesErr = ""
-							go removeDevice(st.ctx, w, st.deviceRemoveDone, st.cfg.AccountToken, d.ID)
+							go removeDevice(st.ctx, w, st.deviceRemoveDone, token, d.ID)
 						}
 					} else {
 						st.deviceArmed[d.ID] = now
@@ -1637,6 +1672,17 @@ func accountSignInRows(th *material.Theme, st *state, pal palette) []layout.Flex
 				return lbl.Layout(gtx)
 			})
 		}))
+	}
+	if st.loginAtCap {
+		children = append(children,
+			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Label(th, unit.Sp(12), "account at device limit — remove one to retry")
+				lbl.Color = pal.errFg
+				return lbl.Layout(gtx)
+			}),
+		)
+		children = append(children, devicesSection(th, st, pal)...)
 	}
 	children = append(children,
 		layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
@@ -2484,6 +2530,20 @@ func loadAccountNow(ctx context.Context) acctLoadResult {
 	}
 	sort.Slice(devs, func(i, j int) bool { return devs[i].Created.Before(devs[j].Created) })
 	return acctLoadResult{devices: devs}
+}
+
+func loadDevicesByToken(ctx context.Context, w *app.Window, done chan<- acctLoadResult, token string) {
+	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	devs, err := mullvad.New().ListDevices(cctx, token)
+	if err == nil {
+		sort.Slice(devs, func(i, j int) bool { return devs[i].Created.Before(devs[j].Created) })
+	}
+	select {
+	case done <- acctLoadResult{devices: devs, err: err}:
+	case <-ctx.Done():
+	}
+	w.Invalidate()
 }
 
 func removeDevice(ctx context.Context, w *app.Window, done chan<- deviceRemoveResult, token, id string) {

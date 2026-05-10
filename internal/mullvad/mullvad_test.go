@@ -237,6 +237,28 @@ func TestRegisterDevice(t *testing.T) {
 	}
 }
 
+func TestRegisterDeviceMaxDevices(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/auth/v1/token":
+			writeToken(t, w, "tok-cap")
+		case "/accounts/v1/devices":
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"code":"MAX_DEVICES_REACHED","detail":"too many devices"}`))
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	pub, err := wgtypes.ParseKey("BLNHNoGO88LjV/wDBa7CUUwUzPq/fO2UwcGLy56hKy4=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.RegisterDevice(context.Background(), "acct", pub)
+	if !errors.Is(err, ErrMaxDevices) {
+		t.Fatalf("err = %v, want ErrMaxDevices", err)
+	}
+}
+
 func TestListDevices(t *testing.T) {
 	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

@@ -104,6 +104,8 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("mullvad: %d %s", e.StatusCode, e.Detail)
 }
 
+var ErrMaxDevices = errors.New("mullvad: account at device limit")
+
 func (c *Client) Relays(ctx context.Context) ([]Relay, error) {
 	var raw []struct {
 		Type         string `json:"type"`
@@ -273,6 +275,10 @@ func (c *Client) RegisterDevice(ctx context.Context, account string, pub wgtypes
 	}{pub.String(), false}
 	var raw deviceJSON
 	if err := c.authedJSON(ctx, account, "POST", "/accounts/v1/devices", body, &raw); err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Code == "MAX_DEVICES_REACHED" {
+			return Device{}, ErrMaxDevices
+		}
 		return Device{}, err
 	}
 	return raw.toDevice()

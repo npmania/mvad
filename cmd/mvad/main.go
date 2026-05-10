@@ -301,6 +301,9 @@ func login(args []string) error {
 	}
 	dev, err := c.RegisterDevice(ctx, token, priv.PublicKey())
 	if err != nil {
+		if errors.Is(err, mullvad.ErrMaxDevices) {
+			return atDeviceCap(ctx, c, token)
+		}
 		return err
 	}
 	cfg.AccountToken = token
@@ -315,6 +318,25 @@ func login(args []string) error {
 		return errors.Join(err, revokeErr)
 	}
 	return nil
+}
+
+func atDeviceCap(ctx context.Context, c *mullvad.Client, token string) error {
+	devs, err := c.ListDevices(ctx, token)
+	if err != nil {
+		return err
+	}
+	sort.Slice(devs, func(i, j int) bool { return devs[i].Created.Before(devs[j].Created) })
+	fmt.Printf("mvad: account at device limit (%d/5).\n", len(devs))
+	fmt.Println("Devices on this account:")
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	for _, d := range devs {
+		fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n", d.ID, d.Name, d.IPv4, d.Created.UTC().Format(time.RFC3339))
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	fmt.Println("Remove one with `mvad devices remove <id>` then re-run `mvad login`.")
+	return &exitErr{code: 3}
 }
 
 func loginImport(ctx context.Context, c *mullvad.Client, cfg *config.Config, token, keyStr string, expiry time.Time) error {
