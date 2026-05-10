@@ -20,7 +20,7 @@ const (
 
 var (
 	ErrUnsupported = errors.New("split: unsupported platform")
-	ErrUnavailable = errors.New("split: not active; run mvad connect first")
+	ErrUnavailable = errors.New("split-tunnel inactive")
 )
 
 func Up(gw netip.Addr, dev string) error { return up(gw, dev) }
