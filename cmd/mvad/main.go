@@ -224,15 +224,22 @@ func signup(args []string) error {
 	if len(args) != 0 {
 		return usagef(usageSignup)
 	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if cfg.DeviceID != "" {
+		who := cfg.DeviceName
+		if who == "" {
+			who = cfg.DeviceID
+		}
+		return fmt.Errorf("already logged in as %s; run mvad logout first", who)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	num, err := mullvad.New().CreateAccount(ctx)
 	if err != nil {
 		return fmt.Errorf("create account: %w", err)
-	}
-	cfg, err := config.Load()
-	if err != nil {
-		return err
 	}
 	cfg.AccountToken = num
 	if err := cfg.Save(); err != nil {
