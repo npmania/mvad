@@ -57,12 +57,13 @@ type tray struct {
 	revision uint32
 }
 
-func startTray(ctx context.Context, polls <-chan pollResult, windowState <-chan bool, cmds chan<- trayCmd) (*tray, error) {
-	conn, err := dbus.SessionBus()
-	if err != nil {
-		return nil, err
-	}
+func sniWatcherOwned(conn *dbus.Conn) bool {
+	var has bool
+	err := conn.BusObject().Call("org.freedesktop.DBus.NameHasOwner", 0, "org.kde.StatusNotifierWatcher").Store(&has)
+	return err == nil && has
+}
 
+func startSNI(ctx context.Context, conn *dbus.Conn, polls <-chan pollResult, windowState <-chan bool, cmds chan<- trayCmd) (*tray, error) {
 	busName := "org.kde.StatusNotifierItem-" + strconv.Itoa(os.Getpid()) + "-1"
 	reply, err := conn.RequestName(busName, dbus.NameFlagDoNotQueue)
 	if err != nil {

@@ -30,6 +30,8 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 
+	"github.com/godbus/dbus/v5"
+
 	"github.com/npmania/mvad/internal/config"
 	"github.com/npmania/mvad/internal/mullvad"
 	"github.com/npmania/mvad/internal/split"
@@ -247,9 +249,16 @@ func main() {
 
 	go pollStatus(ctx, pollsWin, pollsTray)
 
-	tr, err := startTray(ctx, pollsTray, windowState, trayCmds)
+	conn, err := dbus.SessionBus()
+	var tr *tray
+	if err == nil && sniWatcherOwned(conn) {
+		tr, err = startSNI(ctx, conn, pollsTray, windowState, trayCmds)
+	} else {
+		err = errors.New("no SNI watcher; running windowed-only")
+		tr = nil
+	}
 	if err != nil {
-		log.Printf("tray: %v (no SNI watcher; install snixembed for tint2/legacy trays, or AppIndicator extension for GNOME)", err)
+		log.Printf("tray: %v", err)
 		tr = nil
 	}
 
