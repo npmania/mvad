@@ -55,7 +55,11 @@ func Plain(s Snapshot) string {
 		}
 	}
 	if !s.AccountExpiry.IsZero() {
-		fmt.Fprintf(&b, "account expires %s\n", humanExpiry(s.AccountExpiry))
+		if time.Until(s.AccountExpiry) <= 0 {
+			b.WriteString("account expired\n")
+		} else {
+			fmt.Fprintf(&b, "account expires %s\n", humanExpiry(s.AccountExpiry))
+		}
 	}
 	if s.DeviceName != "" {
 		fmt.Fprintf(&b, "device: %s\n", s.DeviceName)
@@ -105,38 +109,28 @@ func JSON(s Snapshot) (string, error) {
 }
 
 type waybarOut struct {
-	Text       string `json:"text"`
-	Alt        string `json:"alt"`
-	Tooltip    string `json:"tooltip"`
-	Class      string `json:"class"`
-	Percentage int    `json:"percentage"`
+	Text    string `json:"text"`
+	Alt     string `json:"alt"`
+	Tooltip string `json:"tooltip"`
+	Class   string `json:"class"`
 }
 
 func Waybar(s Snapshot) (string, error) {
-	if !s.Up {
-		data, err := json.Marshal(struct {
-			Text    string `json:"text"`
-			Alt     string `json:"alt"`
-			Tooltip string `json:"tooltip"`
-			Class   string `json:"class"`
-		}{"off", "disconnected", "mvad disconnected", "disconnected"})
-		if err != nil {
-			return "", err
+	o := waybarOut{Text: "off", Alt: "disconnected", Tooltip: "mvad disconnected", Class: "disconnected"}
+	if s.Up {
+		name := s.Relay
+		if name == "" {
+			name = s.PeerEndpoint.String()
 		}
-		return string(data) + "\n", nil
+		tip := "connected to " + name
+		if s.Entry != "" {
+			tip += " via " + s.Entry
+		}
+		if s.TxBytes != 0 || s.RxBytes != 0 {
+			tip += fmt.Sprintf("\n%s ↑ / %s ↓", humanBytes(s.TxBytes), humanBytes(s.RxBytes))
+		}
+		o = waybarOut{Text: name, Alt: "connected", Tooltip: tip, Class: "connected"}
 	}
-	name := s.Relay
-	if name == "" {
-		name = s.PeerEndpoint.String()
-	}
-	tip := "connected to " + name
-	if s.Entry != "" {
-		tip += " via " + s.Entry
-	}
-	if s.TxBytes != 0 || s.RxBytes != 0 {
-		tip += fmt.Sprintf("\n%s ↑ / %s ↓", humanBytes(s.TxBytes), humanBytes(s.RxBytes))
-	}
-	o := waybarOut{Text: name, Alt: "connected", Tooltip: tip, Class: "connected"}
 	data, err := json.Marshal(o)
 	if err != nil {
 		return "", err
@@ -159,9 +153,6 @@ func humanDuration(d time.Duration) string {
 
 func humanExpiry(t time.Time) string {
 	d := time.Until(t)
-	if d <= 0 {
-		return "expired"
-	}
 	if d >= 48*time.Hour {
 		return fmt.Sprintf("in %d days", int(d/(24*time.Hour)))
 	}

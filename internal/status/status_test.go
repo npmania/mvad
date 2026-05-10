@@ -104,9 +104,6 @@ func TestJSONConnected(t *testing.T) {
 
 func TestHumanExpiry(t *testing.T) {
 	now := time.Now()
-	if got := humanExpiry(now.Add(-time.Second)); got != "expired" {
-		t.Errorf("expired: %q", got)
-	}
 	if got := humanExpiry(now.Add(12*24*time.Hour + time.Hour)); got != "in 12 days" {
 		t.Errorf("12 days: %q", got)
 	}
@@ -115,6 +112,15 @@ func TestHumanExpiry(t *testing.T) {
 	}
 	if got := humanExpiry(now.Add(30 * time.Second)); got != "in under a minute" {
 		t.Errorf("under a minute: %q", got)
+	}
+}
+
+func TestPlainAccountExpired(t *testing.T) {
+	s := Snapshot{Up: true, Relay: "se-mma-wg-001", LastHandshake: time.Now().Add(-3 * time.Second), AccountExpiry: time.Now().Add(-time.Hour)}
+	got := Plain(s)
+	want := "connected to se-mma-wg-001, last handshake 3s ago\naccount expired\n"
+	if got != want {
+		t.Errorf("Plain = %q, want %q", got, want)
 	}
 }
 
@@ -140,7 +146,7 @@ func TestWaybarConnected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Waybar: %v", err)
 	}
-	want := `{"text":"se-mma-wg-001","alt":"connected","tooltip":"connected to se-mma-wg-001\n12.3 GB ↑ / 4.5 GB ↓","class":"connected","percentage":0}` + "\n"
+	want := `{"text":"se-mma-wg-001","alt":"connected","tooltip":"connected to se-mma-wg-001\n12.3 GB ↑ / 4.5 GB ↓","class":"connected"}` + "\n"
 	if got != want {
 		t.Errorf("Waybar = %s, want %s", got, want)
 	}
