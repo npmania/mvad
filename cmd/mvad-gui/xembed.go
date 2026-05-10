@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/jezek/xgb"
+	"github.com/jezek/xgb/randr"
 	"github.com/jezek/xgb/shape"
 	"github.com/jezek/xgb/xproto"
 	"golang.org/x/image/font"
@@ -47,6 +48,8 @@ type xembed struct {
 	popupW    int
 	popupH    int
 	popupHov  int
+
+	randrAvailable bool
 }
 
 type popupRow struct {
@@ -157,6 +160,11 @@ func startXEmbed(ctx context.Context, polls <-chan pollResult, windowState <-cha
 		done:     make(chan struct{}),
 		redraw:   make(chan struct{}, 1),
 		popupHov: -1,
+	}
+	if err := randr.Init(conn); err != nil {
+		log.Printf("tray: randr init: %v", err)
+	} else {
+		x.randrAvailable = true
 	}
 	x.menu = buildTrayMenu(favorites, false, "")
 	log.Printf("tray: menu initialized (%d items)", len(x.menu))
@@ -457,16 +465,36 @@ func (x *xembed) openPopup(rootX, rootY int16, shown bool) {
 	height := uint16(totalH)
 
 	screen := xproto.Setup(x.conn).DefaultScreen(x.conn)
+	minX, minY := 0, 0
+	maxX, maxY := int(screen.WidthInPixels), int(screen.HeightInPixels)
+	if x.randrAvailable {
+		if r, err := randr.GetMonitors(x.conn, screen.Root, true).Reply(); err == nil && r != nil {
+			for _, m := range r.Monitors {
+				if int(rootX) >= int(m.X) && int(rootX) < int(m.X)+int(m.Width) &&
+					int(rootY) >= int(m.Y) && int(rootY) < int(m.Y)+int(m.Height) {
+					minX, minY = int(m.X), int(m.Y)
+					maxX, maxY = int(m.X)+int(m.Width), int(m.Y)+int(m.Height)
+					break
+				}
+			}
+		}
+	}
 	px := int(rootX)
 	py := int(rootY) - int(height)
-	if py < 0 {
+	if py < minY {
 		py = int(rootY) + 22
 	}
-	if px+int(width) > int(screen.WidthInPixels) {
-		px = int(screen.WidthInPixels) - int(width)
+	if py+int(height) > maxY {
+		py = maxY - int(height)
 	}
-	if px < 0 {
-		px = 0
+	if py < minY {
+		py = minY
+	}
+	if px+int(width) > maxX {
+		px = maxX - int(width)
+	}
+	if px < minX {
+		px = minX
 	}
 
 	wid, err := xproto.NewWindowId(x.conn)
