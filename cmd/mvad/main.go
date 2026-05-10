@@ -87,7 +87,8 @@ const (
 
 func wantHelp(args []string) bool {
 	for _, a := range args {
-		if a == "--help" || a == "-h" {
+		switch a {
+		case "-h", "--h", "-help", "--help":
 			return true
 		}
 	}
@@ -119,7 +120,7 @@ func (e *exitErr) Unwrap() error { return e.err }
 func main() {
 	if len(os.Args) >= 2 {
 		switch os.Args[1] {
-		case "help", "--help", "-h":
+		case "help", "-h", "--h", "-help", "--help":
 			fmt.Print(usageText)
 			return
 		}
@@ -328,7 +329,8 @@ func devices(args []string) error {
 		return usagef(usageDevices)
 	}
 	sub, rest := args[0], args[1:]
-	if sub == "--help" || sub == "-h" {
+	switch sub {
+	case "-h", "--h", "-help", "--help":
 		fmt.Println(usageDevices)
 		return nil
 	}
@@ -845,7 +847,8 @@ func lockdownCmd(args []string) error {
 		return usagef(usageLockdown)
 	}
 	sub, rest := args[0], args[1:]
-	if sub == "--help" || sub == "-h" {
+	switch sub {
+	case "-h", "--h", "-help", "--help":
 		fmt.Println(usageLockdown)
 		return nil
 	}
