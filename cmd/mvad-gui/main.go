@@ -74,6 +74,15 @@ type splitPID struct {
 }
 
 type state struct {
+	ctx context.Context
+
+	cmdDone          chan cmdResult
+	relayDone        chan relayLoadResult
+	splitDone        chan splitLoadResult
+	runDone          chan runResult
+	acctDone         chan acctLoadResult
+	deviceRemoveDone chan deviceRemoveResult
+
 	snap        status.Snapshot
 	pollErr     error
 	cmdOut      string
@@ -150,22 +159,33 @@ type row struct {
 	relay   *mullvad.Relay
 }
 
-func main() {
-	go func() {
-		w := new(app.Window)
-		w.Option(app.Title("mvad"), app.Size(unit.Dp(420), unit.Dp(540)))
-		if err := run(w); err != nil {
-			log.Fatal(err)
-		}
-		os.Exit(0)
-	}()
-	app.Main()
+type trayCmd int
+
+const (
+	cmdShow trayCmd = iota
+	cmdConnect
+	cmdSettings
+	cmdAccount
+	cmdSplit
+	cmdQuit
+)
+
+var errQuit = errors.New("quit")
+
+func applyTrayCmd(st *state, c trayCmd) {
+	switch c {
+	case cmdConnect:
+		st.view = viewConnect
+	case cmdSettings:
+		st.view = viewSettings
+	case cmdAccount:
+		st.view = viewAccount
+	case cmdSplit:
+		st.view = viewSplit
+	}
 }
 
-func run(w *app.Window) error {
-	th := material.NewTheme()
-	th.Shaper = text.NewShaper(text.WithCollection(gofont.Collection()))
-
+func main() {
 	var st state
 	st.filter.SingleLine = true
 	st.relayList.Axis = layout.Vertical
@@ -192,20 +212,65 @@ func run(w *app.Window) error {
 		st.transport = "wireguard"
 	}
 
-	polls := make(chan pollResult, 1)
-	cmdDone := make(chan cmdResult, 1)
-	relayDone := make(chan relayLoadResult, 1)
-	splitDone := make(chan splitLoadResult, 1)
-	runDone := make(chan runResult, 1)
-	acctDone := make(chan acctLoadResult, 1)
-	deviceRemoveDone := make(chan deviceRemoveResult, 1)
+	pollsWin := make(chan pollResult, 1)
+	var pollsTray chan pollResult
+	var trayCmds chan trayCmd
+
+	st.cmdDone = make(chan cmdResult, 1)
+	st.relayDone = make(chan relayLoadResult, 1)
+	st.splitDone = make(chan splitLoadResult, 1)
+	st.runDone = make(chan runResult, 1)
+	st.acctDone = make(chan acctLoadResult, 1)
+	st.deviceRemoveDone = make(chan deviceRemoveResult, 1)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go pollStatus(ctx, w, polls)
+	st.ctx = ctx
 
-	st.relayLoading = true
-	go loadRelays(ctx, w, false, relayDone)
+	go pollStatus(ctx, pollsWin, pollsTray)
+
+	go func() {
+		windowed := true
+		for windowed {
+			w := new(app.Window)
+			w.Option(app.Title("mvad"), app.Size(unit.Dp(420), unit.Dp(540)))
+			if err := run(w, &st, pollsWin, trayCmds); err != nil {
+				if !errors.Is(err, errQuit) {
+					log.Fatal(err)
+				}
+				break
+			}
+			windowed = false
+		}
+		cancel()
+		os.Exit(0)
+	}()
+	app.Main()
+}
+
+func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan trayCmd) error {
+	th := material.NewTheme()
+	th.Shaper = text.NewShaper(text.WithCollection(gofont.Collection()))
+
+	wctx, wcancel := context.WithCancel(st.ctx)
+	defer wcancel()
+	go func() {
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-wctx.Done():
+				return
+			case <-t.C:
+				w.Invalidate()
+			}
+		}
+	}()
+
+	if !st.relayLoading && len(st.relays) == 0 && st.relayLoadErr == "" {
+		st.relayLoading = true
+		go loadRelays(st.ctx, w, false, st.relayDone)
+	}
 
 	var ops op.Ops
 	for {
@@ -218,7 +283,7 @@ func run(w *app.Window) error {
 				st.pollErr = nil
 			}
 			st.loadedAny = true
-		case r := <-cmdDone:
+		case r := <-st.cmdDone:
 			if r.name != "xdg-open" {
 				st.running = false
 				st.runningName = ""
@@ -258,7 +323,7 @@ func run(w *app.Window) error {
 					if !st.acctRefreshing && st.cfg.AccountToken != "" {
 						st.acctRefreshing = true
 						st.acctRefreshErr = ""
-						go loadAccount(ctx, w, acctDone)
+						go loadAccount(st.ctx, w, st.acctDone)
 					}
 				}
 			case "signup":
@@ -273,16 +338,16 @@ func run(w *app.Window) error {
 					if !st.acctRefreshing && st.cfg.AccountToken != "" {
 						st.acctRefreshing = true
 						st.acctRefreshErr = ""
-						go loadAccount(ctx, w, acctDone)
+						go loadAccount(st.ctx, w, st.acctDone)
 					}
 				}
 			case "split":
 				if !st.splitLoading {
 					st.splitLoading = true
-					go loadSplit(ctx, w, splitDone)
+					go loadSplit(st.ctx, w, st.splitDone)
 				}
 			}
-		case r := <-relayDone:
+		case r := <-st.relayDone:
 			st.relayLoading = false
 			if r.err != nil {
 				st.relayLoadErr = r.err.Error()
@@ -290,7 +355,7 @@ func run(w *app.Window) error {
 				st.relayLoadErr = ""
 				st.relays = r.relays
 			}
-		case r := <-splitDone:
+		case r := <-st.splitDone:
 			st.splitLoading = false
 			st.splitLoaded = true
 			if r.err != nil {
@@ -300,7 +365,7 @@ func run(w *app.Window) error {
 				st.splitErr = ""
 				st.splitPIDs = r.pids
 			}
-		case r := <-runDone:
+		case r := <-st.runDone:
 			for i, c := range st.runStarting {
 				if c == r.cmdline {
 					st.runStarting = append(st.runStarting[:i], st.runStarting[i+1:]...)
@@ -312,9 +377,9 @@ func run(w *app.Window) error {
 			st.cmdErr = r.err
 			if !st.splitLoading {
 				st.splitLoading = true
-				go loadSplit(ctx, w, splitDone)
+				go loadSplit(st.ctx, w, st.splitDone)
 			}
-		case r := <-acctDone:
+		case r := <-st.acctDone:
 			st.acctRefreshing = false
 			if r.err != nil {
 				st.acctRefreshErr = r.err.Error()
@@ -328,7 +393,7 @@ func run(w *app.Window) error {
 					st.cfg = c
 				}
 			}
-		case r := <-deviceRemoveDone:
+		case r := <-st.deviceRemoveDone:
 			st.deviceRemoving = ""
 			if r.err != nil {
 				st.devicesErr = r.err.Error()
@@ -339,15 +404,20 @@ func run(w *app.Window) error {
 				if !st.acctRefreshing && st.cfg.AccountToken != "" {
 					st.acctRefreshing = true
 					st.acctRefreshErr = ""
-					go loadAccount(ctx, w, acctDone)
+					go loadAccount(st.ctx, w, st.acctDone)
 				}
+			}
+		case c := <-trayCmds:
+			applyTrayCmd(st, c)
+			if c == cmdQuit {
+				return errQuit
 			}
 		default:
 		}
 
 		switch e := w.Event().(type) {
 		case app.DestroyEvent:
-			return e.Err
+			return nil
 		case app.FrameEvent:
 			gtx := app.NewContext(&ops, e)
 
@@ -365,23 +435,23 @@ func run(w *app.Window) error {
 				if st.cfg.AccountToken != "" && !st.devicesLoaded && !st.acctRefreshing {
 					st.acctRefreshing = true
 					st.acctRefreshErr = ""
-					go loadAccount(ctx, w, acctDone)
+					go loadAccount(st.ctx, w, st.acctDone)
 				}
 			}
 			if st.tabSplit.Clicked(gtx) {
 				st.view = viewSplit
 				if !st.splitLoaded && !st.splitLoading {
 					st.splitLoading = true
-					go loadSplit(ctx, w, splitDone)
+					go loadSplit(st.ctx, w, st.splitDone)
 				}
 			}
 			if !st.relayLoading && st.refresh.Clicked(gtx) {
 				st.relayLoading = true
-				go loadRelays(ctx, w, true, relayDone)
+				go loadRelays(st.ctx, w, true, st.relayDone)
 			}
 			if !st.splitLoading && st.splitRefresh.Clicked(gtx) {
 				st.splitLoading = true
-				go loadSplit(ctx, w, splitDone)
+				go loadSplit(st.ctx, w, st.splitDone)
 			}
 			for {
 				ev, ok := st.addPID.Update(gtx)
@@ -407,7 +477,7 @@ func run(w *app.Window) error {
 				st.cmdOut = ""
 				st.running = true
 				st.runningName = "split-add"
-				go runCmd(ctx, w, cmdDone, "split", "add-pid", strconv.Itoa(n))
+				go runCmd(st.ctx, w, st.cmdDone, "split", "add-pid", strconv.Itoa(n))
 			}
 			if len(st.runStarting) == 0 && st.runBtn.Clicked(gtx) {
 				text := strings.TrimSpace(st.runCmdEd.Text())
@@ -416,7 +486,7 @@ func run(w *app.Window) error {
 					st.runCmdEd.SetText("")
 					st.runStarting = append(st.runStarting, text)
 					args := append([]string{"run", "--"}, fields...)
-					go runOutside(ctx, w, runDone, text, args...)
+					go runOutside(st.ctx, w, st.runDone, text, args...)
 				}
 			}
 			if !st.running && st.clearBtn.Clicked(gtx) {
@@ -426,7 +496,7 @@ func run(w *app.Window) error {
 					st.cmdOut = ""
 					st.running = true
 					st.runningName = "split-clear"
-					go runCmd(ctx, w, cmdDone, "split", "clear")
+					go runCmd(st.ctx, w, st.cmdDone, "split", "clear")
 				} else {
 					st.clearArmed = time.Now()
 				}
@@ -450,7 +520,7 @@ func run(w *app.Window) error {
 					if st.lockdownOn.Value {
 						sub = "on"
 					}
-					go runCmd(ctx, w, cmdDone, "lockdown", sub)
+					go runCmd(st.ctx, w, st.cmdDone, "lockdown", sub)
 				}
 			}
 			if st.trWG.Clicked(gtx) {
@@ -460,7 +530,7 @@ func run(w *app.Window) error {
 				st.transport = "tcp"
 			}
 			if st.openAcct.Clicked(gtx) {
-				go runExternal(ctx, w, cmdDone, "xdg-open", "https://mullvad.net/account")
+				go runExternal(st.ctx, w, st.cmdDone, "xdg-open", "https://mullvad.net/account")
 			}
 			if !st.running && st.btn.Clicked(gtx) {
 				if st.snap.Up {
@@ -468,7 +538,7 @@ func run(w *app.Window) error {
 					st.cmdOut = ""
 					st.running = true
 					st.runningName = "disconnect"
-					go runCmd(ctx, w, cmdDone, "disconnect")
+					go runCmd(st.ctx, w, st.cmdDone, "disconnect")
 				} else if st.selected != "" {
 					st.cmdErr = nil
 					st.cmdOut = ""
@@ -482,7 +552,7 @@ func run(w *app.Window) error {
 						args = append(args, "--transport=tcp")
 					}
 					args = append(args, "--", st.selected)
-					go runCmd(ctx, w, cmdDone, args...)
+					go runCmd(st.ctx, w, st.cmdDone, args...)
 				}
 			}
 			if !st.running && st.reconnect.Clicked(gtx) && st.cfg.LastRelay != "" {
@@ -494,7 +564,7 @@ func run(w *app.Window) error {
 				if st.allowLAN.Value {
 					args = append(args, "--allow-lan")
 				}
-				go runCmd(ctx, w, cmdDone, args...)
+				go runCmd(st.ctx, w, st.cmdDone, args...)
 			}
 			if !st.running && st.loginBtn.Clicked(gtx) {
 				token := strings.TrimSpace(st.loginToken.Text())
@@ -506,7 +576,7 @@ func run(w *app.Window) error {
 					st.cmdOut = ""
 					st.running = true
 					st.runningName = "login"
-					go runCmd(ctx, w, cmdDone, "login", "--", token)
+					go runCmd(st.ctx, w, st.cmdDone, "login", "--", token)
 				}
 			}
 			if !st.running && st.signupBtn.Clicked(gtx) {
@@ -514,7 +584,7 @@ func run(w *app.Window) error {
 				st.cmdOut = ""
 				st.running = true
 				st.runningName = "signup"
-				go runCmd(ctx, w, cmdDone, "signup")
+				go runCmd(st.ctx, w, st.cmdDone, "signup")
 			}
 			if !st.running && st.logout.Clicked(gtx) {
 				if !st.logoutArmed.IsZero() && time.Since(st.logoutArmed) < 5*time.Second {
@@ -523,7 +593,7 @@ func run(w *app.Window) error {
 					st.cmdOut = ""
 					st.running = true
 					st.runningName = "logout"
-					go runCmd(ctx, w, cmdDone, "logout")
+					go runCmd(st.ctx, w, st.cmdDone, "logout")
 				} else {
 					st.logoutArmed = time.Now()
 				}
@@ -534,7 +604,7 @@ func run(w *app.Window) error {
 			if !st.acctRefreshing && st.acctRefresh.Clicked(gtx) && st.cfg.AccountToken != "" {
 				st.acctRefreshing = true
 				st.acctRefreshErr = ""
-				go loadAccount(ctx, w, acctDone)
+				go loadAccount(st.ctx, w, st.acctDone)
 			}
 			if st.cfg.AccountToken != "" {
 				now := time.Now()
@@ -555,7 +625,7 @@ func run(w *app.Window) error {
 						if st.deviceRemoving == "" {
 							st.deviceRemoving = d.ID
 							st.devicesErr = ""
-							go removeDevice(ctx, w, deviceRemoveDone, st.cfg.AccountToken, d.ID)
+							go removeDevice(st.ctx, w, st.deviceRemoveDone, st.cfg.AccountToken, d.ID)
 						}
 					} else {
 						st.deviceArmed[d.ID] = now
@@ -568,7 +638,7 @@ func run(w *app.Window) error {
 				}
 			}
 
-			layoutUI(gtx, th, &st)
+			layoutUI(gtx, th, st)
 			e.Frame(gtx.Ops)
 		}
 	}
@@ -1554,16 +1624,22 @@ type pollResult struct {
 	err  error
 }
 
-func pollStatus(ctx context.Context, w *app.Window, out chan<- pollResult) {
+func pollStatus(ctx context.Context, win, tray chan<- pollResult) {
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	for {
-		snap, err := readStatus()
+		r := pollResult{}
+		r.snap, r.err = readStatus()
 		select {
-		case out <- pollResult{snap: snap, err: err}:
+		case win <- r:
 		default:
 		}
-		w.Invalidate()
+		if tray != nil {
+			select {
+			case tray <- r:
+			default:
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return
