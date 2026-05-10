@@ -75,7 +75,7 @@ Run 'mvad <command> --help' for command-specific options.
 
 const (
 	usageSignup          = "usage: mvad signup"
-	usageLogin           = "usage: mvad login [--key <base64-privkey>] <token>"
+	usageLogin           = "usage: mvad login [--key <base64-privkey>] [<token>]"
 	usageLogout          = "usage: mvad logout"
 	usageDevices         = "usage: mvad devices <list|remove>"
 	usageDevicesList     = "usage: mvad devices list"
@@ -230,6 +230,14 @@ func signup(args []string) error {
 	if err != nil {
 		return fmt.Errorf("create account: %w", err)
 	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	cfg.AccountToken = num
+	if err := cfg.Save(); err != nil {
+		return err
+	}
 	fmt.Println(num)
 	return nil
 }
@@ -245,10 +253,22 @@ func login(args []string) error {
 		}
 		return usagef(usageLogin)
 	}
-	if fs.NArg() != 1 {
+	if fs.NArg() > 1 {
 		return usagef(usageLogin)
 	}
-	token := fs.Arg(0)
+	var token string
+	if fs.NArg() == 1 {
+		token = fs.Arg(0)
+	} else {
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		if cfg.AccountToken == "" {
+			return usagef(usageLogin)
+		}
+		token = cfg.AccountToken
+	}
 	if len(token) != 16 {
 		return fmt.Errorf("invalid account token: must be 16 digits")
 	}
