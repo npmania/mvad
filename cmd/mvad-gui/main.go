@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,7 +63,13 @@ const (
 	viewConnect viewKind = iota
 	viewSettings
 	viewAccount
+	viewSplit
 )
+
+type splitPID struct {
+	pid  int
+	comm string
+}
 
 type state struct {
 	snap        status.JSONOut
@@ -98,11 +105,24 @@ type state struct {
 	lockdownOn widget.Bool
 	transport  string
 
-	tabConn, tabSet, tabAcct widget.Clickable
-	trWG, trTCP              widget.Clickable
-	openAcct                 widget.Clickable
-	logout                   widget.Clickable
-	logoutArmed              time.Time
+	tabConn, tabSet, tabAcct, tabSplit widget.Clickable
+	trWG, trTCP                        widget.Clickable
+	openAcct                           widget.Clickable
+	logout                             widget.Clickable
+	logoutArmed                        time.Time
+
+	splitList    widget.List
+	splitRefresh widget.Clickable
+	addPID       widget.Editor
+	runCmdEd     widget.Editor
+	runBtn       widget.Clickable
+	clearBtn     widget.Clickable
+	clearArmed   time.Time
+	splitPIDs    []splitPID
+	splitErr     string
+	splitLoading bool
+	splitLoaded  bool
+	runStarting  []string
 }
 
 type row struct {
@@ -132,6 +152,10 @@ func run(w *app.Window) error {
 	st.expanded = map[string]bool{}
 	st.headerClicks = map[string]*widget.Clickable{}
 	st.rowClicks = map[string]*widget.Clickable{}
+	st.splitList.Axis = layout.Vertical
+	st.addPID.SingleLine = true
+	st.addPID.Submit = true
+	st.runCmdEd.SingleLine = true
 
 	cfg, err := config.Load()
 	if err != nil || cfg == nil {
@@ -149,6 +173,8 @@ func run(w *app.Window) error {
 	pollErrs := make(chan error, 1)
 	cmdDone := make(chan cmdResult, 1)
 	relayDone := make(chan relayLoadResult, 1)
+	splitDone := make(chan splitLoadResult, 1)
+	runDone := make(chan runResult, 1)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -189,6 +215,11 @@ func run(w *app.Window) error {
 						st.cfg = c
 					}
 				}
+			case "split":
+				if !st.splitLoading {
+					st.splitLoading = true
+					go loadSplit(ctx, w, splitDone)
+				}
 			}
 		case r := <-relayDone:
 			st.relayLoading = false
@@ -197,6 +228,30 @@ func run(w *app.Window) error {
 			} else {
 				st.relayLoadErr = ""
 				st.relays = r.relays
+			}
+		case r := <-splitDone:
+			st.splitLoading = false
+			st.splitLoaded = true
+			if r.err != nil {
+				st.splitErr = r.err.Error()
+				st.splitPIDs = nil
+			} else {
+				st.splitErr = ""
+				st.splitPIDs = r.pids
+			}
+		case r := <-runDone:
+			for i, c := range st.runStarting {
+				if c == r.cmdline {
+					st.runStarting = append(st.runStarting[:i], st.runStarting[i+1:]...)
+					break
+				}
+			}
+			st.cmdName = "run"
+			st.cmdOut = r.out
+			st.cmdErr = r.err
+			if !st.splitLoading {
+				st.splitLoading = true
+				go loadSplit(ctx, w, splitDone)
 			}
 		default:
 		}
@@ -219,9 +274,71 @@ func run(w *app.Window) error {
 			if st.tabAcct.Clicked(gtx) {
 				st.view = viewAccount
 			}
+			if st.tabSplit.Clicked(gtx) {
+				st.view = viewSplit
+				if !st.splitLoaded && !st.splitLoading {
+					st.splitLoading = true
+					go loadSplit(ctx, w, splitDone)
+				}
+			}
 			if !st.relayLoading && st.refresh.Clicked(gtx) {
 				st.relayLoading = true
 				go loadRelays(ctx, w, true, relayDone)
+			}
+			if !st.splitLoading && st.splitRefresh.Clicked(gtx) {
+				st.splitLoading = true
+				go loadSplit(ctx, w, splitDone)
+			}
+			for {
+				ev, ok := st.addPID.Update(gtx)
+				if !ok {
+					break
+				}
+				if _, ok := ev.(widget.SubmitEvent); !ok {
+					continue
+				}
+				text := strings.TrimSpace(st.addPID.Text())
+				n, err := strconv.Atoi(text)
+				if err != nil || n <= 0 {
+					st.cmdErr = fmt.Errorf("invalid pid %q", text)
+					st.cmdOut = ""
+					st.cmdName = "split-add"
+					continue
+				}
+				if st.running {
+					continue
+				}
+				st.addPID.SetText("")
+				st.cmdErr = nil
+				st.cmdOut = ""
+				st.running = true
+				st.runningName = "split-add"
+				go runCmd(ctx, w, cmdDone, "split", "add-pid", strconv.Itoa(n))
+			}
+			if len(st.runStarting) == 0 && st.runBtn.Clicked(gtx) {
+				text := strings.TrimSpace(st.runCmdEd.Text())
+				fields := strings.Fields(text)
+				if len(fields) > 0 {
+					st.runCmdEd.SetText("")
+					st.runStarting = append(st.runStarting, text)
+					args := append([]string{"run", "--"}, fields...)
+					go runOutside(ctx, w, runDone, text, args...)
+				}
+			}
+			if !st.running && st.clearBtn.Clicked(gtx) {
+				if !st.clearArmed.IsZero() && time.Since(st.clearArmed) < 5*time.Second {
+					st.clearArmed = time.Time{}
+					st.cmdErr = nil
+					st.cmdOut = ""
+					st.running = true
+					st.runningName = "split-clear"
+					go runCmd(ctx, w, cmdDone, "split", "clear")
+				} else {
+					st.clearArmed = time.Now()
+				}
+			}
+			if !st.clearArmed.IsZero() && time.Since(st.clearArmed) >= 5*time.Second {
+				st.clearArmed = time.Time{}
 			}
 			if st.allowLAN.Update(gtx) {
 				st.cfg.AllowLAN = st.allowLAN.Value
@@ -346,6 +463,8 @@ func panelBody(gtx layout.Context, th *material.Theme, st *state, pal palette) l
 		return settingsBody(gtx, th, st, pal)
 	case viewAccount:
 		return accountBody(gtx, th, st, pal)
+	case viewSplit:
+		return splitBody(gtx, th, st, pal)
 	}
 	if st.snap.Connected {
 		return connectedBody(gtx, th, st, pal)
@@ -365,6 +484,10 @@ func tabStrip(gtx layout.Context, th *material.Theme, st *state, pal palette) la
 		layout.Rigid(layout.Spacer{Width: unit.Dp(16)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return tab(gtx, th, &st.tabAcct, pal, "Account", st.view == viewAccount)
+		}),
+		layout.Rigid(layout.Spacer{Width: unit.Dp(16)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return tab(gtx, th, &st.tabSplit, pal, "Split", st.view == viewSplit)
 		}),
 	)
 }
@@ -1190,4 +1313,276 @@ func parseTime(s string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return t, true
+}
+
+type splitLoadResult struct {
+	pids []splitPID
+	err  error
+}
+
+type runResult struct {
+	cmdline string
+	out     string
+	err     error
+}
+
+func loadSplit(ctx context.Context, w *app.Window, done chan<- splitLoadResult) {
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(cctx, mvadPath(), "split", "list").Output()
+	var res splitLoadResult
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			res.err = fmt.Errorf("%s", strings.TrimSpace(string(ee.Stderr)))
+		} else {
+			res.err = err
+		}
+	} else {
+		for line := range strings.SplitSeq(string(out), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			pid, err := strconv.Atoi(line)
+			if err != nil {
+				continue
+			}
+			res.pids = append(res.pids, splitPID{pid: pid, comm: readComm(pid)})
+		}
+	}
+	select {
+	case done <- res:
+	case <-ctx.Done():
+	}
+	w.Invalidate()
+}
+
+func readComm(pid int) string {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
+	if err != nil {
+		return "(gone)"
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func runOutside(ctx context.Context, w *app.Window, done chan<- runResult, cmdline string, args ...string) {
+	full := append([]string{"mvad"}, args...)
+	out, err := exec.CommandContext(ctx, "pkexec", full...).CombinedOutput()
+	select {
+	case done <- runResult{cmdline: cmdline, out: string(out), err: err}:
+	case <-ctx.Done():
+	}
+	w.Invalidate()
+}
+
+func splitBody(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Label(th, unit.Sp(14), "processes")
+					lbl.Color = pal.fg
+					return lbl.Layout(gtx)
+				}),
+				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					return layout.Dimensions{Size: gtx.Constraints.Min}
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return splitRefreshGlyph(gtx, th, st, pal)
+				}),
+			)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			return splitListArea(gtx, th, st, pal)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return splitEditor(gtx, th, &st.addPID, pal, "Add PID")
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return splitRunBlock(gtx, th, st, pal)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return splitClearLink(gtx, th, st, pal)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return footer(gtx, th, st, pal)
+		}),
+	)
+}
+
+func splitRefreshGlyph(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
+	return st.splitRefresh.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		c := pal.fg
+		if st.splitLoading {
+			c = pal.muted
+		}
+		sz := gtx.Dp(24)
+		gtx.Constraints.Min = image.Pt(sz, sz)
+		return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Label(th, unit.Sp(14), "↻")
+			lbl.Color = c
+			return lbl.Layout(gtx)
+		})
+	})
+}
+
+func splitListArea(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
+	if st.splitErr != "" {
+		return splitErrorPlaceholder(gtx, th, pal, st.splitErr)
+	}
+	if st.splitLoading && len(st.splitPIDs) == 0 && len(st.runStarting) == 0 {
+		return centerLabel(gtx, th, pal.muted, "loading…")
+	}
+	rows := len(st.splitPIDs) + len(st.runStarting)
+	if rows == 0 {
+		return centerLabel(gtx, th, pal.muted, "no processes")
+	}
+	list := material.List(th, &st.splitList)
+	return list.Layout(gtx, rows, func(gtx layout.Context, i int) layout.Dimensions {
+		if i < len(st.splitPIDs) {
+			return splitPIDRow(gtx, th, pal, st.splitPIDs[i])
+		}
+		return splitPendingRow(gtx, th, pal, st.runStarting[i-len(st.splitPIDs)])
+	})
+}
+
+func splitPIDRow(gtx layout.Context, th *material.Theme, pal palette, p splitPID) layout.Dimensions {
+	return layout.Inset{Top: unit.Dp(2), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				gtx.Constraints.Min.X = gtx.Dp(56)
+				lbl := material.Label(th, unit.Sp(13), strconv.Itoa(p.pid))
+				lbl.Color = pal.fg
+				return lbl.Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Label(th, unit.Sp(13), p.comm)
+				lbl.Color = pal.muted
+				return lbl.Layout(gtx)
+			}),
+		)
+	})
+}
+
+func splitPendingRow(gtx layout.Context, th *material.Theme, pal palette, cmdline string) layout.Dimensions {
+	return layout.Inset{Top: unit.Dp(2), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				gtx.Constraints.Min.X = gtx.Dp(56)
+				lbl := material.Label(th, unit.Sp(13), "…")
+				lbl.Color = pal.muted
+				return lbl.Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Label(th, unit.Sp(13), cmdline)
+				lbl.Color = pal.muted
+				return lbl.Layout(gtx)
+			}),
+		)
+	})
+}
+
+func splitErrorPlaceholder(gtx layout.Context, th *material.Theme, pal palette, msg string) layout.Dimensions {
+	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Vertical, Alignment: layout.Middle}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Label(th, unit.Sp(13), firstLine(msg))
+				lbl.Color = pal.errFg
+				return lbl.Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Label(th, unit.Sp(13), "press ↻ to retry")
+				lbl.Color = pal.muted
+				return lbl.Layout(gtx)
+			}),
+		)
+	})
+}
+
+func splitEditor(gtx layout.Context, th *material.Theme, ed *widget.Editor, pal palette, label string) layout.Dimensions {
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Label(th, unit.Sp(12), label)
+			lbl.Color = pal.muted
+			return lbl.Layout(gtx)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			es := material.Editor(th, ed, "")
+			es.Color = pal.fg
+			es.HintColor = pal.muted
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+			return es.Layout(gtx)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			c := pal.dim
+			if gtx.Focused(ed) {
+				c = pal.accent
+			}
+			sz := image.Pt(gtx.Constraints.Max.X, max(gtx.Dp(1), 1))
+			paint.FillShape(gtx.Ops, c, clip.Rect{Max: sz}.Op())
+			return layout.Dimensions{Size: sz}
+		}),
+	)
+}
+
+func splitRunBlock(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return splitEditor(gtx, th, &st.runCmdEd, pal, "Run outside tunnel")
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					return layout.Dimensions{Size: gtx.Constraints.Min}
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					busy := len(st.runStarting) > 0
+					label := "Run"
+					if busy {
+						label += "…"
+					}
+					if busy {
+						gtx = gtx.Disabled()
+					}
+					return st.runBtn.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						macro := op.Record(gtx.Ops)
+						dims := layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							lbl := material.Label(th, unit.Sp(14), label)
+							lbl.Color = pal.fg
+							return lbl.Layout(gtx)
+						})
+						call := macro.Stop()
+						rr := clip.UniformRRect(image.Rectangle{Max: dims.Size}, gtx.Dp(4))
+						border := clip.Stroke{Path: rr.Path(gtx.Ops), Width: float32(max(gtx.Dp(1), 1))}.Op()
+						paint.FillShape(gtx.Ops, pal.fg, border)
+						call.Add(gtx.Ops)
+						return dims
+					})
+				}),
+			)
+		}),
+	)
+}
+
+func splitClearLink(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
+	label := "Clear all"
+	if !st.clearArmed.IsZero() && time.Since(st.clearArmed) < 5*time.Second {
+		label = "Confirm?"
+	}
+	return st.clearBtn.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		lbl := material.Label(th, unit.Sp(13), label)
+		lbl.Color = pal.fg
+		return lbl.Layout(gtx)
+	})
 }
