@@ -81,7 +81,7 @@ const (
 	usageDevicesList     = "usage: mvad devices list"
 	usageDevicesRemove   = "usage: mvad devices remove <id>"
 	usageRotateKey       = "usage: mvad rotate-key"
-	usageRelays          = "usage: mvad relays [--bridges] [--refresh] [--country C]... [--city C]... [--provider P]... [--owned true|false] [--protocol wireguard]"
+	usageRelays          = "usage: mvad relays [--bridges] [--refresh] [--json] [--country C]... [--city C]... [--provider P]... [--owned true|false] [--protocol wireguard]"
 	usageConnect         = "usage: mvad connect [--allow-lan] [--via <entry>] [--transport wireguard|tcp|shadowsocks [--port 80|443|5001] [--bridge <host>]] <relay>"
 	usageReconnect       = "usage: mvad reconnect [--allow-lan]"
 	usageUp              = "usage: mvad up [--allow-lan] [--via <entry>] [--transport wireguard|tcp|shadowsocks [--port 80|443|5001] [--bridge <host>]] <relay>"
@@ -541,6 +541,7 @@ func listRelays(args []string) error {
 	protocol := fs.String("protocol", "", "filter by protocol: wireguard")
 	bridges := fs.Bool("bridges", false, "list shadowsocks bridges instead of wireguard relays")
 	refresh := fs.Bool("refresh", false, "force refetch from API, bypassing the 24h cache")
+	asJSON := fs.Bool("json", false, "output as JSON array")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Println(usageRelays)
@@ -572,7 +573,7 @@ func listRelays(args []string) error {
 			return err
 		}
 		sort.Slice(bs, func(i, j int) bool { return bs[i].Hostname < bs[j].Hostname })
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		var keep []mullvad.Bridge
 		for _, b := range bs {
 			if !b.Active {
 				continue
@@ -583,6 +584,13 @@ func listRelays(args []string) error {
 			if filterOwned && b.Owned != wantOwned {
 				continue
 			}
+			keep = append(keep, b)
+		}
+		if *asJSON {
+			return json.NewEncoder(os.Stdout).Encode(keep)
+		}
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		for _, b := range keep {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", b.Hostname, b.Country, b.City, b.IPv4, b.Provider)
 		}
 		return w.Flush()
@@ -613,7 +621,7 @@ func listRelays(args []string) error {
 		return err
 	}
 	sort.Slice(relays, func(i, j int) bool { return relays[i].Hostname < relays[j].Hostname })
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	var keep []mullvad.Relay
 	for _, r := range relays {
 		if !r.Active {
 			continue
@@ -624,6 +632,13 @@ func listRelays(args []string) error {
 		if filterOwned && r.Owned != wantOwned {
 			continue
 		}
+		keep = append(keep, r)
+	}
+	if *asJSON {
+		return json.NewEncoder(os.Stdout).Encode(keep)
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	for _, r := range keep {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", r.Hostname, r.Country, r.City, r.IPv4, r.Provider)
 	}
 	return w.Flush()

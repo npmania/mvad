@@ -52,26 +52,26 @@ func New() *Client {
 }
 
 type Relay struct {
-	Hostname     string
-	Country      string
-	City         string
-	IPv4         netip.Addr
-	IPv6         netip.Addr
-	PublicKey    wgtypes.Key
-	Provider     string
-	Owned        bool
-	Active       bool
-	MultihopPort uint16
+	Hostname     string      `json:"hostname"`
+	Country      string      `json:"country"`
+	City         string      `json:"city"`
+	IPv4         netip.Addr  `json:"ipv4"`
+	IPv6         netip.Addr  `json:"ipv6"`
+	PublicKey    wgtypes.Key `json:"public_key"`
+	Provider     string      `json:"provider"`
+	Owned        bool        `json:"owned"`
+	Active       bool        `json:"active"`
+	MultihopPort uint16      `json:"multihop_port"`
 }
 
 type Bridge struct {
-	Hostname string
-	Country  string
-	City     string
-	IPv4     netip.Addr
-	Provider string
-	Owned    bool
-	Active   bool
+	Hostname string     `json:"hostname"`
+	Country  string     `json:"country"`
+	City     string     `json:"city"`
+	IPv4     netip.Addr `json:"ipv4"`
+	Provider string     `json:"provider"`
+	Owned    bool       `json:"owned"`
+	Active   bool       `json:"active"`
 }
 
 type ShadowsocksEndpoint struct {
