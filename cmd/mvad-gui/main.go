@@ -14,6 +14,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime/debug"
 	"sort"
 	"strconv"
@@ -1092,7 +1093,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 						args = append(args, "--key="+key)
 					}
 					args = append(args, "--", token)
-					go runCmd(st.ctx, w, st.cmdDone, args...)
+					go runUserCmd(st.ctx, w, st.cmdDone, args...)
 				}
 			}
 			if !st.running && st.signupBtn.Clicked(gtx) {
@@ -1100,7 +1101,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 				st.cmdOut = ""
 				st.running = true
 				st.runningName = "signup"
-				go runCmd(st.ctx, w, st.cmdDone, "signup")
+				go runUserCmd(st.ctx, w, st.cmdDone, "signup")
 			}
 			if !st.running && st.snap.Up {
 				st.logoutArmed = time.Time{}
@@ -1113,7 +1114,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 					st.cmdOut = ""
 					st.running = true
 					st.runningName = "logout"
-					go runCmd(st.ctx, w, st.cmdDone, "logout")
+					go runUserCmd(st.ctx, w, st.cmdDone, "logout")
 				} else {
 					st.logoutArmed = time.Now()
 				}
@@ -1129,7 +1130,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 					st.cmdOut = ""
 					st.running = true
 					st.runningName = "rotate-key"
-					go runCmd(st.ctx, w, st.cmdDone, "rotate-key")
+					go runUserCmd(st.ctx, w, st.cmdDone, "rotate-key")
 				} else {
 					st.rotateKeyArmed = time.Now()
 				}
@@ -2419,10 +2420,31 @@ type cmdResult struct {
 	err  error
 }
 
+var mvadCmd = func() string {
+	if exe, err := os.Executable(); err == nil {
+		cand := filepath.Join(filepath.Dir(exe), "mvad")
+		if _, err := os.Stat(cand); err == nil {
+			return cand
+		}
+	}
+	return "mvad"
+}()
+
 func runCmd(ctx context.Context, w *app.Window, done chan<- cmdResult, args ...string) {
 	// pkexec must invoke the path the polkit policy is keyed on.
 	full := append([]string{"mvad"}, args...)
 	out, err := exec.CommandContext(ctx, "pkexec", full...).CombinedOutput()
+	select {
+	case done <- cmdResult{name: args[0], out: string(out), err: err}:
+	case <-ctx.Done():
+	}
+	if w != nil {
+		w.Invalidate()
+	}
+}
+
+func runUserCmd(ctx context.Context, w *app.Window, done chan<- cmdResult, args ...string) {
+	out, err := exec.CommandContext(ctx, mvadCmd, args...).CombinedOutput()
 	select {
 	case done <- cmdResult{name: args[0], out: string(out), err: err}:
 	case <-ctx.Done():
