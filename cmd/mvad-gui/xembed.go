@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/jezek/xgb"
+	"github.com/jezek/xgb/shape"
 	"github.com/jezek/xgb/xproto"
 )
 
@@ -87,24 +88,30 @@ func startXEmbed(ctx context.Context, polls <-chan pollResult, windowState <-cha
 		conn.Close()
 		return nil, err
 	}
-	depth, ok := tryARGB(conn, screen, wid)
-	if ok {
-		log.Printf("tray: argb")
+	mask := uint32(xproto.CwBackPixmap | xproto.CwEventMask)
+	values := []uint32{
+		xproto.BackPixmapParentRelative,
+		xproto.EventMaskButtonPress | xproto.EventMaskExposure,
+	}
+	if err := xproto.CreateWindowChecked(conn, screen.RootDepth, wid, screen.Root,
+		0, 0, 22, 22, 0,
+		xproto.WindowClassInputOutput, screen.RootVisual,
+		mask, values).Check(); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	depth := screen.RootDepth
+
+	if err := shape.Init(conn); err != nil {
+		log.Printf("tray: depth24, shape=err: %v", err)
 	} else {
-		mask := uint32(xproto.CwBackPixmap | xproto.CwEventMask)
-		values := []uint32{
-			xproto.BackPixmapParentRelative,
-			xproto.EventMaskButtonPress | xproto.EventMaskExposure,
+		rects := buildShapeRects(pmDown, 22, 22)
+		if err := shape.RectanglesChecked(conn, shape.SoSet, shape.SkBounding,
+			xproto.ClipOrderingYXBanded, wid, 0, 0, rects).Check(); err != nil {
+			log.Printf("tray: depth24, shape=err: %v", err)
+		} else {
+			log.Printf("tray: depth24, shape=ok")
 		}
-		if err := xproto.CreateWindowChecked(conn, screen.RootDepth, wid, screen.Root,
-			0, 0, 22, 22, 0,
-			xproto.WindowClassInputOutput, screen.RootVisual,
-			mask, values).Check(); err != nil {
-			conn.Close()
-			return nil, err
-		}
-		depth = screen.RootDepth
-		log.Printf("tray: rgb")
 	}
 
 	info := make([]byte, 8)
@@ -152,43 +159,30 @@ func startXEmbed(ctx context.Context, polls <-chan pollResult, windowState <-cha
 	return x, nil
 }
 
-// tryARGB attempts to create an ARGB tray window using the first
-// depth-32 TrueColor visual the screen advertises. tint2 doesn't
-// broadcast _NET_SYSTEM_TRAY_VISUAL, so we don't ask, we just try.
-func tryARGB(conn *xgb.Conn, screen *xproto.ScreenInfo, wid xproto.Window) (byte, bool) {
-	for _, d := range screen.AllowedDepths {
-		if d.Depth != 32 {
-			continue
-		}
-		for _, v := range d.Visuals {
-			if v.Class != xproto.VisualClassTrueColor {
-				continue
+// shield() lays bytes out as A,R,G,B, so alpha is at offset 0.
+func buildShapeRects(pix []byte, w, h int) []xproto.Rectangle {
+	var out []xproto.Rectangle
+	for y := range h {
+		x := 0
+		for x < w {
+			for x < w && pix[(y*w+x)*4] < 128 {
+				x++
 			}
-			cm, err := xproto.NewColormapId(conn)
-			if err != nil {
-				return 0, false
+			start := x
+			for x < w && pix[(y*w+x)*4] >= 128 {
+				x++
 			}
-			if err := xproto.CreateColormapChecked(conn, xproto.ColormapAllocNone, cm, screen.Root, v.VisualId).Check(); err != nil {
-				continue
+			if x > start {
+				out = append(out, xproto.Rectangle{
+					X:      int16(start),
+					Y:      int16(y),
+					Width:  uint16(x - start),
+					Height: 1,
+				})
 			}
-			mask := uint32(xproto.CwBackPixel | xproto.CwBorderPixel | xproto.CwEventMask | xproto.CwColormap)
-			values := []uint32{
-				0,
-				0,
-				xproto.EventMaskButtonPress | xproto.EventMaskExposure,
-				uint32(cm),
-			}
-			if err := xproto.CreateWindowChecked(conn, 32, wid, screen.Root,
-				0, 0, 22, 22, 0,
-				xproto.WindowClassInputOutput, v.VisualId,
-				mask, values).Check(); err != nil {
-				xproto.FreeColormap(conn, cm)
-				continue
-			}
-			return 32, true
 		}
 	}
-	return 0, false
+	return out
 }
 
 func (x *xembed) openFont() {
