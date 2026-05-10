@@ -123,9 +123,10 @@ type state struct {
 	closeToTray widget.Bool
 	transport   string
 	tcpPort     uint16
+	bridge      widget.Editor
 
 	tabConn, tabSet, tabAcct, tabSplit widget.Clickable
-	trWG, trTCP                        widget.Clickable
+	trWG, trTCP, trSS                  widget.Clickable
 	trP80, trP443, trP5001             widget.Clickable
 	openAcct                           widget.Clickable
 	logout                             widget.Clickable
@@ -252,6 +253,7 @@ func main() {
 	st.loginToken.SingleLine = true
 	st.loginKey.SingleLine = true
 	st.viaEntry.SingleLine = true
+	st.bridge.SingleLine = true
 
 	cfg, err := config.Load()
 	if err != nil || cfg == nil {
@@ -262,7 +264,9 @@ func main() {
 	st.lockdownOn.Value = cfg.LockdownOn
 	st.closeToTray.Value = !cfg.NoCloseToTray
 	st.transport = cfg.LastTransport
-	if st.transport != "tcp" {
+	switch st.transport {
+	case "tcp", "shadowsocks":
+	default:
 		st.transport = "wireguard"
 	}
 	st.tcpPort = cfg.LastTransportPort
@@ -270,6 +274,9 @@ func main() {
 	case 80, 443, 5001:
 	default:
 		st.tcpPort = 5001
+	}
+	if cfg.LastBridge != "" {
+		st.bridge.SetText(cfg.LastBridge)
 	}
 
 	pollsWin := make(chan pollResult, 1)
@@ -416,13 +423,16 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 					if c, err := config.Load(); err == nil && c != nil {
 						st.cfg = c
 						st.transport = c.LastTransport
-						if st.transport != "tcp" {
+						switch st.transport {
+						case "tcp", "shadowsocks":
+						default:
 							st.transport = "wireguard"
 						}
 						switch c.LastTransportPort {
 						case 80, 443, 5001:
 							st.tcpPort = c.LastTransportPort
 						}
+						st.bridge.SetText(c.LastBridge)
 					}
 				}
 			case "lockdown":
@@ -695,6 +705,9 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 			if st.trTCP.Clicked(gtx) {
 				st.transport = "tcp"
 			}
+			if st.trSS.Clicked(gtx) {
+				st.transport = "shadowsocks"
+			}
 			if st.trP80.Clicked(gtx) {
 				st.tcpPort = 80
 			}
@@ -731,6 +744,9 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 						}
 						if st.transport == "tcp" {
 							args = append(args, "--transport=tcp", fmt.Sprintf("--port=%d", st.tcpPort))
+						}
+						if st.transport == "shadowsocks" {
+							args = append(args, "--transport=shadowsocks", "--bridge="+strings.TrimSpace(st.bridge.Text()))
 						}
 						if varg != "" {
 							args = append(args, varg)
@@ -1025,6 +1041,9 @@ func disconnectedBody(gtx layout.Context, th *material.Theme, st *state, pal pal
 	}
 	rows := buildRows(st.relays, st.expanded, filterText)
 	btnDisabled := st.selected == "" || st.running
+	if st.transport == "shadowsocks" && strings.TrimSpace(st.bridge.Text()) == "" {
+		btnDisabled = true
+	}
 
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -1200,6 +1219,10 @@ func transportSection(gtx layout.Context, th *material.Theme, st *state, pal pal
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					return transportLabel(gtx, th, &st.trTCP, pal, "tcp", st.transport == "tcp")
 				}),
+				layout.Rigid(layout.Spacer{Width: unit.Dp(16)}.Layout),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return transportLabel(gtx, th, &st.trSS, pal, "shadowsocks", st.transport == "shadowsocks")
+				}),
 			)
 		}),
 	}
@@ -1226,6 +1249,14 @@ func transportSection(gtx layout.Context, th *material.Theme, st *state, pal pal
 						return transportLabel(gtx, th, &st.trP5001, pal, "5001", st.tcpPort == 5001)
 					}),
 				)
+			}),
+		)
+	}
+	if st.transport == "shadowsocks" {
+		children = append(children,
+			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return splitEditor(gtx, th, &st.bridge, pal, "Bridge host")
 			}),
 		)
 	}
@@ -2017,6 +2048,12 @@ func startConnect(st *state, w *app.Window, relay string) {
 		st.cmdOut = ""
 		return
 	}
+	if st.transport == "shadowsocks" && strings.TrimSpace(st.bridge.Text()) == "" {
+		st.cmdName = "connect"
+		st.cmdErr = errors.New("shadowsocks requires bridge host")
+		st.cmdOut = ""
+		return
+	}
 	st.cmdErr = nil
 	st.cmdOut = ""
 	st.running = true
@@ -2027,6 +2064,9 @@ func startConnect(st *state, w *app.Window, relay string) {
 	}
 	if st.transport == "tcp" {
 		args = append(args, "--transport=tcp", fmt.Sprintf("--port=%d", st.tcpPort))
+	}
+	if st.transport == "shadowsocks" {
+		args = append(args, "--transport=shadowsocks", "--bridge="+strings.TrimSpace(st.bridge.Text()))
 	}
 	if varg != "" {
 		args = append(args, varg)
