@@ -24,6 +24,7 @@ import (
 	"gioui.org/app"
 	"gioui.org/f32"
 	"gioui.org/font/gofont"
+	"gioui.org/io/pointer"
 	"gioui.org/io/system"
 	"gioui.org/layout"
 	"gioui.org/op"
@@ -1293,6 +1294,7 @@ func tabStrip(gtx layout.Context, th *material.Theme, st *state, pal palette) la
 
 func tab(gtx layout.Context, th *material.Theme, c *widget.Clickable, pal palette, label string, active bool) layout.Dimensions {
 	return c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		pointer.CursorPointer.Add(gtx.Ops)
 		return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			lbl := material.Label(th, unit.Sp(14), label)
 			lbl.Color = pal.muted
@@ -1535,6 +1537,7 @@ func favoriteRow(gtx layout.Context, th *material.Theme, st *state, pal palette,
 			layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					pointer.CursorPointer.Add(gtx.Ops)
 					lbl := material.Label(th, unit.Sp(13), "remove")
 					lbl.Color = pal.fg
 					return lbl.Layout(gtx)
@@ -1635,6 +1638,7 @@ func transportSection(gtx layout.Context, th *material.Theme, st *state, pal pal
 
 func transportLabel(gtx layout.Context, th *material.Theme, c *widget.Clickable, pal palette, label string, active bool) layout.Dimensions {
 	return c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		pointer.CursorPointer.Add(gtx.Ops)
 		lbl := material.Label(th, unit.Sp(13), label)
 		lbl.Color = pal.muted
 		if active {
@@ -1658,6 +1662,7 @@ func transportLabel(gtx layout.Context, th *material.Theme, c *widget.Clickable,
 
 func togglePill(gtx layout.Context, b *widget.Bool, pal palette) layout.Dimensions {
 	return b.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		pointer.CursorPointer.Add(gtx.Ops)
 		w, h := gtx.Dp(28), gtx.Dp(14)
 		track := pal.dim
 		if b.Value {
@@ -1770,6 +1775,7 @@ func accountInfoRows(th *material.Theme, st *state, pal palette) []layout.FlexCh
 		layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return st.openAcct.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				pointer.CursorPointer.Add(gtx.Ops)
 				lbl := material.Label(th, unit.Sp(14), "Open account page ↗")
 				lbl.Color = pal.accent
 				return lbl.Layout(gtx)
@@ -1848,6 +1854,7 @@ func accountSignInRows(th *material.Theme, st *state, pal palette) []layout.Flex
 		layout.Rigid(layout.Spacer{Height: unit.Dp(24)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return st.openAcct.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				pointer.CursorPointer.Add(gtx.Ops)
 				lbl := material.Label(th, unit.Sp(14), "Open account page ↗")
 				lbl.Color = pal.accent
 				return lbl.Layout(gtx)
@@ -1941,6 +1948,7 @@ func deviceRow(gtx layout.Context, th *material.Theme, st *state, pal palette, d
 					col = pal.errFg
 				}
 				return c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					pointer.CursorPointer.Add(gtx.Ops)
 					lbl := material.Label(th, unit.Sp(13), label)
 					lbl.Color = col
 					return lbl.Layout(gtx)
@@ -2044,6 +2052,7 @@ func filterEditor(gtx layout.Context, th *material.Theme, ed *widget.Editor, pal
 
 func refreshGlyph(gtx layout.Context, th *material.Theme, click *widget.Clickable, loading bool, pal palette) layout.Dimensions {
 	return click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		pointer.CursorPointer.Add(gtx.Ops)
 		c := pal.fg
 		if loading {
 			c = pal.muted
@@ -2141,6 +2150,7 @@ func headerRow(gtx layout.Context, th *material.Theme, st *state, pal palette, l
 				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 						return ec.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							pointer.CursorPointer.Add(gtx.Ops)
 							gtx.Constraints.Min.X = gtx.Constraints.Max.X
 							lbl := material.Label(th, sz, label)
 							lbl.Color = pal.fg
@@ -2149,6 +2159,7 @@ func headerRow(gtx layout.Context, th *material.Theme, st *state, pal palette, l
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return ac.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							pointer.CursorPointer.Add(gtx.Ops)
 							return layout.Inset{Left: unit.Dp(8), Right: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 								lbl := material.Label(th, unit.Sp(12), "Any")
 								if selected {
@@ -2190,6 +2201,7 @@ func relayRow(gtx layout.Context, th *material.Theme, st *state, pal palette, r 
 	}
 	selected := st.selected == r.Hostname
 	return rc.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		pointer.CursorPointer.Add(gtx.Ops)
 		gtx.Constraints.Min.X = gtx.Constraints.Max.X
 		return layout.Stack{}.Layout(gtx,
 			layout.Stacked(func(gtx layout.Context) layout.Dimensions {
@@ -2232,6 +2244,7 @@ func reconnectLink(gtx layout.Context, th *material.Theme, st *state, pal palett
 	return layout.Inset{Top: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			return st.reconnect.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				pointer.CursorPointer.Add(gtx.Ops)
 				lbl := material.Label(th, unit.Sp(13), label)
 				lbl.Color = pal.fg
 				return lbl.Layout(gtx)
@@ -2252,6 +2265,7 @@ func actionButton(gtx layout.Context, th *material.Theme, btn *widget.Clickable,
 	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		gtx.Constraints.Max.X = gtx.Dp(140)
 		return btn.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			pointer.CursorPointer.Add(gtx.Ops)
 			macro := op.Record(gtx.Ops)
 			dims := layout.UniformInset(unit.Dp(10)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -2273,6 +2287,7 @@ func actionButton(gtx layout.Context, th *material.Theme, btn *widget.Clickable,
 func drawToggle(gtx layout.Context, st *state, pal palette) layout.Dimensions {
 	sz := image.Pt(gtx.Dp(32), gtx.Dp(32))
 	return st.toggle.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		pointer.CursorPointer.Add(gtx.Ops)
 		if st.dark {
 			drawSun(gtx, pal)
 		} else {
@@ -2970,6 +2985,7 @@ func appShortcutBtn(gtx layout.Context, th *material.Theme, st *state, pal palet
 		gtx = gtx.Disabled()
 	}
 	return c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		pointer.CursorPointer.Add(gtx.Ops)
 		macro := op.Record(gtx.Ops)
 		dims := layout.UniformInset(unit.Dp(6)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -3046,6 +3062,7 @@ func splitOtherRow(gtx layout.Context, th *material.Theme, st *state, pal palett
 					st.procAddClicks[p.pid] = c
 				}
 				return c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					pointer.CursorPointer.Add(gtx.Ops)
 					lbl := material.Label(th, unit.Sp(14), "+")
 					lbl.Color = pal.fg
 					return lbl.Layout(gtx)
@@ -3075,6 +3092,7 @@ func splitAdvancedToggle(gtx layout.Context, th *material.Theme, st *state, pal 
 		glyph = "▴"
 	}
 	return st.splitAdvToggle.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		pointer.CursorPointer.Add(gtx.Ops)
 		lbl := material.Label(th, unit.Sp(13), "Advanced "+glyph)
 		lbl.Color = pal.muted
 		return lbl.Layout(gtx)
@@ -3134,6 +3152,7 @@ func splitAppRow(gtx layout.Context, th *material.Theme, st *state, pal palette,
 			layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					pointer.CursorPointer.Add(gtx.Ops)
 					lbl := material.Label(th, unit.Sp(13), "remove")
 					lbl.Color = pal.fg
 					return lbl.Layout(gtx)
@@ -3177,6 +3196,7 @@ func splitPIDRow(gtx layout.Context, th *material.Theme, st *state, pal palette,
 					col = pal.errFg
 				}
 				return c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					pointer.CursorPointer.Add(gtx.Ops)
 					lbl := material.Label(th, unit.Sp(13), label)
 					lbl.Color = col
 					return lbl.Layout(gtx)
@@ -3277,6 +3297,7 @@ func splitRunBlock(gtx layout.Context, th *material.Theme, st *state, pal palett
 						gtx = gtx.Disabled()
 					}
 					return st.runBtn.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						pointer.CursorPointer.Add(gtx.Ops)
 						macro := op.Record(gtx.Ops)
 						dims := layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 							lbl := material.Label(th, unit.Sp(14), label)
@@ -3302,6 +3323,7 @@ func splitClearLink(gtx layout.Context, th *material.Theme, st *state, pal palet
 		label = "Confirm?"
 	}
 	return st.clearBtn.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		pointer.CursorPointer.Add(gtx.Ops)
 		lbl := material.Label(th, unit.Sp(13), label)
 		lbl.Color = pal.fg
 		return lbl.Layout(gtx)
