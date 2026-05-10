@@ -5,23 +5,51 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"image/color"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
 
 	"gioui.org/app"
+	"gioui.org/f32"
 	"gioui.org/font/gofont"
 	"gioui.org/layout"
 	"gioui.org/op"
+	"gioui.org/op/clip"
+	"gioui.org/op/paint"
 	"gioui.org/text"
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 
 	"github.com/npmania/mvad/internal/status"
+)
+
+type palette struct {
+	bg, fg, muted, dim, accent, errFg color.NRGBA
+}
+
+var (
+	lightPalette = palette{
+		bg:     color.NRGBA{0xFA, 0xFA, 0xF7, 0xFF},
+		fg:     color.NRGBA{0x1A, 0x1A, 0x1A, 0xFF},
+		muted:  color.NRGBA{0x6B, 0x6B, 0x6B, 0xFF},
+		dim:    color.NRGBA{0xE2, 0xE2, 0xDF, 0xFF},
+		accent: color.NRGBA{0x2E, 0x7D, 0x5B, 0xFF},
+		errFg:  color.NRGBA{0xC0, 0x20, 0x20, 0xFF},
+	}
+	darkPalette = palette{
+		bg:     color.NRGBA{0x14, 0x14, 0x16, 0xFF},
+		fg:     color.NRGBA{0xED, 0xED, 0xE8, 0xFF},
+		muted:  color.NRGBA{0x8A, 0x8A, 0x88, 0xFF},
+		dim:    color.NRGBA{0x2A, 0x2A, 0x2C, 0xFF},
+		accent: color.NRGBA{0x5D, 0xBF, 0x8E, 0xFF},
+		errFg:  color.NRGBA{0xE0, 0x6A, 0x6A, 0xFF},
+	}
 )
 
 type state struct {
@@ -33,12 +61,13 @@ type state struct {
 	running   bool
 	inputErr  string
 	loadedAny bool
+	dark      bool
 }
 
 func main() {
 	go func() {
 		w := new(app.Window)
-		w.Option(app.Title("mvad"), app.Size(unit.Dp(380), unit.Dp(280)))
+		w.Option(app.Title("mvad"), app.Size(unit.Dp(380), unit.Dp(320)))
 		if err := run(w); err != nil {
 			log.Fatal(err)
 		}
@@ -54,6 +83,7 @@ func run(w *app.Window) error {
 	var (
 		relay    widget.Editor
 		btn      widget.Clickable
+		toggle   widget.Clickable
 		st       state
 		snaps    = make(chan status.JSONOut, 1)
 		pollErrs = make(chan error, 1)
@@ -89,6 +119,10 @@ func run(w *app.Window) error {
 		case app.FrameEvent:
 			gtx := app.NewContext(&ops, e)
 
+			if toggle.Clicked(gtx) {
+				st.dark = !st.dark
+			}
+
 			if !st.running && btn.Clicked(gtx) {
 				if st.snap.Connected {
 					st.inputErr = ""
@@ -110,102 +144,125 @@ func run(w *app.Window) error {
 				}
 			}
 
-			layoutUI(gtx, th, &st, &relay, &btn)
+			layoutUI(gtx, th, &st, &relay, &btn, &toggle)
 			e.Frame(gtx.Ops)
 		}
 	}
 }
 
-func layoutUI(gtx layout.Context, th *material.Theme, st *state, relay *widget.Editor, btn *widget.Clickable) {
-	inset := layout.UniformInset(unit.Dp(16))
-	inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return statusHeader(gtx, th, st)
-			}),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				border := widget.Border{
-					Color:        color.NRGBA{R: th.Fg.R, G: th.Fg.G, B: th.Fg.B, A: 0x66},
-					CornerRadius: unit.Dp(4),
-					Width:        unit.Dp(1),
-				}
-				return border.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-						ed := material.Editor(th, relay, "relay (e.g. se-mma-wg-101)")
-						ed.HintColor = color.NRGBA{R: th.Fg.R, G: th.Fg.G, B: th.Fg.B, A: 0x80}
-						return ed.Layout(gtx)
-					})
+func layoutUI(gtx layout.Context, th *material.Theme, st *state, relay *widget.Editor, btn, toggle *widget.Clickable) {
+	pal := lightPalette
+	if st.dark {
+		pal = darkPalette
+	}
+	paint.FillShape(gtx.Ops, pal.bg, clip.Rect{Max: gtx.Constraints.Max}.Op())
+	th.Bg, th.Fg = pal.bg, pal.fg
+	th.ContrastBg, th.ContrastFg = pal.fg, pal.bg
+
+	layout.Stack{}.Layout(gtx,
+		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+			return layout.UniformInset(unit.Dp(24)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return contentBody(gtx, th, st, relay, btn, pal)
+			})
+		}),
+		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+			return layout.NE.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Top: unit.Dp(12), Right: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return drawToggle(gtx, st, pal, toggle)
 				})
-			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				if st.inputErr == "" {
-					return layout.Dimensions{}
-				}
-				lbl := material.Body2(th, st.inputErr)
-				lbl.Color = color.NRGBA{R: 0xc0, G: 0x20, B: 0x20, A: 0xff}
-				return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, lbl.Layout)
-			}),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					gtx.Constraints.Max.X = gtx.Dp(160)
-					label := "Connect"
-					if st.snap.Connected {
-						label = "Disconnect"
-					}
-					if st.running {
-						gtx = gtx.Disabled()
-						label += "…"
-					}
-					return material.Button(th, btn, label).Layout(gtx)
-				})
-			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return footer(gtx, th, st)
-			}),
-		)
-	})
+			})
+		}),
+	)
 }
 
-func statusHeader(gtx layout.Context, th *material.Theme, st *state) layout.Dimensions {
-	lines := headerLines(st)
-	children := make([]layout.FlexChild, 0, len(lines))
-	for i, line := range lines {
-		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			if i == 0 {
-				return material.H6(th, line).Layout(gtx)
+func contentBody(gtx layout.Context, th *material.Theme, st *state, relay *widget.Editor, btn *widget.Clickable, pal palette) layout.Dimensions {
+	word, wordColor := headline(st, pal)
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Label(th, unit.Sp(24), word)
+			lbl.Color = wordColor
+			return lbl.Layout(gtx)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if !st.snap.Connected {
+				return layout.Dimensions{}
 			}
-			return material.Body1(th, line).Layout(gtx)
-		}))
-	}
-	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+			lines := subLines(st)
+			if len(lines) == 0 {
+				return layout.Dimensions{}
+			}
+			children := make([]layout.FlexChild, 0, len(lines))
+			for _, line := range lines {
+				children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Label(th, unit.Sp(13), line)
+					lbl.Color = pal.muted
+					return lbl.Layout(gtx)
+				}))
+			}
+			return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+			})
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(28)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if st.snap.Connected {
+				return layout.Dimensions{}
+			}
+			return relayInput(gtx, th, relay, pal)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if st.inputErr == "" {
+				return layout.Dimensions{}
+			}
+			lbl := material.Label(th, unit.Sp(12), st.inputErr)
+			lbl.Color = pal.errFg
+			return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, lbl.Layout)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(28)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return actionButton(gtx, th, st, btn, pal)
+		}),
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			return layout.Dimensions{Size: gtx.Constraints.Min}
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return footer(gtx, th, st, pal)
+		}),
+	)
 }
 
-func headerLines(st *state) []string {
+func headline(st *state, pal palette) (string, color.NRGBA) {
 	if !st.loadedAny {
-		return []string{"loading…"}
+		return "Loading…", pal.muted
 	}
-	var out []string
+	if st.snap.Connected {
+		return "Connected", pal.accent
+	}
+	return "Disconnected", pal.fg
+}
+
+func subLines(st *state) []string {
 	s := st.snap
 	if !s.Connected {
-		out = append(out, "disconnected")
-	} else {
-		name := s.Relay
-		if name == "" {
-			name = s.Endpoint
-		}
-		head := "connected to " + name
+		return nil
+	}
+	var out []string
+	name := s.Relay
+	if name == "" {
+		name = s.Endpoint
+	}
+	if name != "" {
 		if s.Entry != "" {
-			head += " via " + s.Entry
+			out = append(out, name+" via "+s.Entry)
+		} else {
+			out = append(out, name)
 		}
-		out = append(out, head)
-		if s.TxBytes != 0 || s.RxBytes != 0 {
-			out = append(out, fmt.Sprintf("%s ↑ / %s ↓", status.HumanBytes(s.TxBytes), status.HumanBytes(s.RxBytes)))
-		}
-		if hs, ok := parseTime(s.LastHandshake); ok {
-			out = append(out, "last handshake "+status.HumanDuration(time.Since(hs))+" ago")
-		}
+	}
+	if s.TxBytes != 0 || s.RxBytes != 0 {
+		out = append(out, fmt.Sprintf("%s ↑ / %s ↓", status.HumanBytes(s.TxBytes), status.HumanBytes(s.RxBytes)))
+	}
+	if hs, ok := parseTime(s.LastHandshake); ok {
+		out = append(out, "last handshake "+status.HumanDuration(time.Since(hs))+" ago")
 	}
 	if exp, ok := parseTime(s.AccountExpiry); ok {
 		if time.Until(exp) <= 0 {
@@ -220,25 +277,118 @@ func headerLines(st *state) []string {
 	return out
 }
 
-func footer(gtx layout.Context, th *material.Theme, st *state) layout.Dimensions {
-	type line struct {
-		text  string
-		color color.NRGBA
-	}
-	muted := color.NRGBA{R: th.Fg.R, G: th.Fg.G, B: th.Fg.B, A: 0x99}
-	red := color.NRGBA{R: 0xc0, G: 0x20, B: 0x20, A: 0xff}
+func relayInput(gtx layout.Context, th *material.Theme, ed *widget.Editor, pal palette) layout.Dimensions {
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Label(th, unit.Sp(12), "Relay")
+			lbl.Color = pal.muted
+			return lbl.Layout(gtx)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			es := material.Editor(th, ed, "")
+			es.Color = pal.fg
+			es.HintColor = pal.muted
+			return es.Layout(gtx)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			c := pal.dim
+			if gtx.Focused(ed) {
+				c = pal.accent
+			}
+			sz := image.Pt(gtx.Constraints.Max.X, max(gtx.Dp(1), 1))
+			paint.FillShape(gtx.Ops, c, clip.Rect{Max: sz}.Op())
+			return layout.Dimensions{Size: sz}
+		}),
+	)
+}
 
+func actionButton(gtx layout.Context, th *material.Theme, st *state, btn *widget.Clickable, pal palette) layout.Dimensions {
+	label := "Connect"
+	if st.snap.Connected {
+		label = "Disconnect"
+	}
+	if st.running {
+		gtx = gtx.Disabled()
+		label += "…"
+	}
+	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		gtx.Constraints.Max.X = gtx.Dp(140)
+		return btn.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			macro := op.Record(gtx.Ops)
+			dims := layout.UniformInset(unit.Dp(10)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Label(th, unit.Sp(14), label)
+					lbl.Color = pal.fg
+					return lbl.Layout(gtx)
+				})
+			})
+			call := macro.Stop()
+			rr := clip.UniformRRect(image.Rectangle{Max: dims.Size}, gtx.Dp(4))
+			border := clip.Stroke{Path: rr.Path(gtx.Ops), Width: float32(max(gtx.Dp(1), 1))}.Op()
+			paint.FillShape(gtx.Ops, pal.fg, border)
+			call.Add(gtx.Ops)
+			return dims
+		})
+	})
+}
+
+func drawToggle(gtx layout.Context, st *state, pal palette, click *widget.Clickable) layout.Dimensions {
+	sz := image.Pt(gtx.Dp(32), gtx.Dp(32))
+	return click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if st.dark {
+			drawSun(gtx, pal)
+		} else {
+			drawMoon(gtx, pal)
+		}
+		return layout.Dimensions{Size: sz}
+	})
+}
+
+func drawMoon(gtx layout.Context, pal palette) {
+	cx, cy := gtx.Dp(16), gtx.Dp(16)
+	r := gtx.Dp(8)
+	base := clip.Ellipse{Min: image.Pt(cx-r, cy-r), Max: image.Pt(cx+r, cy+r)}.Op(gtx.Ops)
+	paint.FillShape(gtx.Ops, pal.muted, base)
+	ox, oy := gtx.Dp(3), gtx.Dp(3)
+	cut := clip.Ellipse{Min: image.Pt(cx-r+ox, cy-r-oy), Max: image.Pt(cx+r+ox, cy+r-oy)}.Op(gtx.Ops)
+	paint.FillShape(gtx.Ops, pal.bg, cut)
+}
+
+func drawSun(gtx layout.Context, pal palette) {
+	cx, cy := gtx.Dp(16), gtx.Dp(16)
+	r := gtx.Dp(5)
+	disc := clip.Ellipse{Min: image.Pt(cx-r, cy-r), Max: image.Pt(cx+r, cy+r)}.Op(gtx.Ops)
+	paint.FillShape(gtx.Ops, pal.muted, disc)
+	inR, outR := gtx.Dp(8), gtx.Dp(14)
+	rayW := max(gtx.Dp(2), 1)
+	half := rayW / 2
+	for i := range 8 {
+		angle := float32(i) * math.Pi / 4
+		stack := op.Affine(f32.Affine2D{}.Rotate(f32.Pt(float32(cx), float32(cy)), angle)).Push(gtx.Ops)
+		ray := clip.Rect{Min: image.Pt(cx-half, cy-outR), Max: image.Pt(cx-half+rayW, cy-inR)}.Op()
+		paint.FillShape(gtx.Ops, pal.muted, ray)
+		stack.Pop()
+	}
+}
+
+func footer(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
+	type line struct {
+		text string
+		c    color.NRGBA
+	}
 	var lines []line
 	if st.running {
-		lines = append(lines, line{text: "running…"})
+		lines = append(lines, line{text: "running…", c: pal.muted})
 	}
 	if st.pollErr != nil {
-		lines = append(lines, line{text: "status: " + st.pollErr.Error(), color: muted})
+		lines = append(lines, line{text: "status: " + st.pollErr.Error(), c: pal.muted})
 	}
 	if st.cmdErr != nil {
-		lines = append(lines, line{text: st.cmdName + ": " + st.cmdErr.Error(), color: red})
+		lines = append(lines, line{text: st.cmdName + ": " + st.cmdErr.Error(), c: pal.errFg})
 		if st.cmdOut != "" {
-			lines = append(lines, line{text: strings.TrimSpace(st.cmdOut), color: red})
+			lines = append(lines, line{text: strings.TrimSpace(st.cmdOut), c: pal.errFg})
 		}
 	}
 	if len(lines) == 0 {
@@ -247,10 +397,8 @@ func footer(gtx layout.Context, th *material.Theme, st *state) layout.Dimensions
 	children := make([]layout.FlexChild, 0, len(lines))
 	for _, l := range lines {
 		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			lbl := material.Body2(th, l.text)
-			if l.color != (color.NRGBA{}) {
-				lbl.Color = l.color
-			}
+			lbl := material.Label(th, unit.Sp(12), l.text)
+			lbl.Color = l.c
 			return lbl.Layout(gtx)
 		}))
 	}
