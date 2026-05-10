@@ -20,6 +20,7 @@ import (
 	"gioui.org/app"
 	"gioui.org/f32"
 	"gioui.org/font/gofont"
+	"gioui.org/io/system"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -169,9 +170,20 @@ const (
 	cmdAccount
 	cmdSplit
 	cmdQuit
+	cmdHide
 )
 
 var errQuit = errors.New("quit")
+
+func setWindowState(ch chan bool, s bool) {
+	for {
+		select {
+		case ch <- s:
+			return
+		case <-ch:
+		}
+	}
+}
 
 func applyTrayCmd(st *state, c trayCmd) {
 	switch c {
@@ -220,6 +232,7 @@ func main() {
 	pollsWin := make(chan pollResult, 1)
 	pollsTray := make(chan pollResult, 1)
 	trayCmds := make(chan trayCmd)
+	windowState := make(chan bool, 1)
 
 	st.cmdDone = make(chan cmdResult, 1)
 	st.relayDone = make(chan relayLoadResult, 1)
@@ -234,7 +247,7 @@ func main() {
 
 	go pollStatus(ctx, pollsWin, pollsTray)
 
-	tr, err := startTray(ctx, pollsTray, trayCmds)
+	tr, err := startTray(ctx, pollsTray, windowState, trayCmds)
 	if err != nil {
 		log.Printf("tray: %v (no SNI watcher; install snixembed for tint2/legacy trays, or AppIndicator extension for GNOME)", err)
 		tr = nil
@@ -254,6 +267,9 @@ func main() {
 			if windowed {
 				w := new(app.Window)
 				w.Option(app.Title("mvad"), app.Size(unit.Dp(420), unit.Dp(540)))
+				if tr != nil {
+					setWindowState(windowState, true)
+				}
 				err := run(w, &st, pollsWin, trayCmds)
 				if errors.Is(err, errQuit) {
 					return
@@ -265,15 +281,19 @@ func main() {
 				if tr == nil {
 					return
 				}
+				setWindowState(windowState, false)
 				continue
 			}
 			select {
 			case c := <-trayCmds:
-				if c == cmdQuit {
+				switch c {
+				case cmdQuit:
 					return
+				case cmdHide:
+				default:
+					applyTrayCmd(&st, c)
+					windowed = true
 				}
-				applyTrayCmd(&st, c)
-				windowed = true
 			case <-pollsWin:
 			case <-ctx.Done():
 				return
@@ -443,9 +463,13 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 				}
 			}
 		case c := <-trayCmds:
-			applyTrayCmd(st, c)
-			if c == cmdQuit {
+			switch c {
+			case cmdHide:
+				w.Perform(system.ActionClose)
+			case cmdQuit:
 				return errQuit
+			default:
+				applyTrayCmd(st, c)
 			}
 		default:
 		}

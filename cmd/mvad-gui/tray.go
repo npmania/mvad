@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"strconv"
+	"sync"
 
 	"github.com/godbus/dbus/v5"
 	"github.com/godbus/dbus/v5/prop"
@@ -51,9 +52,13 @@ type tray struct {
 	cmds    chan<- trayCmd
 	up      bool
 	done    chan struct{}
+
+	mu       sync.Mutex
+	shown    bool
+	revision uint32
 }
 
-func startTray(ctx context.Context, polls <-chan pollResult, cmds chan<- trayCmd) (*tray, error) {
+func startTray(ctx context.Context, polls <-chan pollResult, windowState <-chan bool, cmds chan<- trayCmd) (*tray, error) {
 	conn, err := dbus.SessionBus()
 	if err != nil {
 		return nil, err
@@ -127,11 +132,11 @@ func startTray(ctx context.Context, polls <-chan pollResult, cmds chan<- trayCmd
 	}
 
 	t.done = make(chan struct{})
-	go t.loop(ctx, polls)
+	go t.loop(ctx, polls, windowState)
 	return t, nil
 }
 
-func (t *tray) loop(ctx context.Context, polls <-chan pollResult) {
+func (t *tray) loop(ctx context.Context, polls <-chan pollResult, windowState <-chan bool) {
 	defer close(t.done)
 	for {
 		select {
@@ -144,6 +149,16 @@ func (t *tray) loop(ctx context.Context, polls <-chan pollResult) {
 			}
 			t.up = up
 			t.refresh(up)
+		case s := <-windowState:
+			t.mu.Lock()
+			if t.shown == s {
+				t.mu.Unlock()
+				continue
+			}
+			t.shown = s
+			t.mu.Unlock()
+			t.revision++
+			_ = t.conn.Emit(menuPath, menuIface+".LayoutUpdated", t.revision, int32(0))
 		}
 	}
 }
@@ -221,14 +236,28 @@ var menuItems = []menuItem{
 	{8, "Quit", false, cmdQuit},
 }
 
-func itemProps(it menuItem) map[string]dbus.Variant {
+func (t *tray) showHide() (string, trayCmd) {
+	t.mu.Lock()
+	s := t.shown
+	t.mu.Unlock()
+	if s {
+		return "Hide", cmdHide
+	}
+	return "Show", cmdShow
+}
+
+func (t *tray) itemProps(it menuItem) map[string]dbus.Variant {
 	if it.sep {
 		return map[string]dbus.Variant{
 			"type": dbus.MakeVariant("separator"),
 		}
 	}
+	label := it.label
+	if it.id == 1 {
+		label, _ = t.showHide()
+	}
 	return map[string]dbus.Variant{
-		"label": dbus.MakeVariant(it.label),
+		"label": dbus.MakeVariant(label),
 	}
 }
 
@@ -242,7 +271,7 @@ func (m menuHandler) GetLayout(parentID, recursionDepth int32, propertyNames []s
 	for _, it := range menuItems {
 		children = append(children, dbus.MakeVariant(menuLayout{
 			ID:    it.id,
-			Props: itemProps(it),
+			Props: m.t.itemProps(it),
 		}))
 	}
 	root := menuLayout{
@@ -258,14 +287,14 @@ func (m menuHandler) GetGroupProperties(ids []int32, propertyNames []string) ([]
 	want := ids
 	if len(want) == 0 {
 		for _, it := range menuItems {
-			out = append(out, menuItemProps{ID: it.id, Props: itemProps(it)})
+			out = append(out, menuItemProps{ID: it.id, Props: m.t.itemProps(it)})
 		}
 		return out, nil
 	}
 	for _, id := range want {
 		for _, it := range menuItems {
 			if it.id == id {
-				out = append(out, menuItemProps{ID: it.id, Props: itemProps(it)})
+				out = append(out, menuItemProps{ID: it.id, Props: m.t.itemProps(it)})
 				break
 			}
 		}
@@ -276,7 +305,7 @@ func (m menuHandler) GetGroupProperties(ids []int32, propertyNames []string) ([]
 func (m menuHandler) GetProperty(id int32, name string) (dbus.Variant, *dbus.Error) {
 	for _, it := range menuItems {
 		if it.id == id {
-			if v, ok := itemProps(it)[name]; ok {
+			if v, ok := m.t.itemProps(it)[name]; ok {
 				return v, nil
 			}
 			return dbus.Variant{}, dbus.MakeFailedError(errors.New("property not found"))
@@ -291,8 +320,12 @@ func (m menuHandler) Event(id int32, eventID string, data dbus.Variant, timestam
 	}
 	for _, it := range menuItems {
 		if it.id == id && !it.sep {
+			cmd := it.cmd
+			if it.id == 1 {
+				_, cmd = m.t.showHide()
+			}
 			select {
-			case m.t.cmds <- it.cmd:
+			case m.t.cmds <- cmd:
 			default:
 			}
 			return nil
