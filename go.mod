@@ -4,6 +4,7 @@ go 1.24
 
 require (
 	gioui.org v0.9.0
+	github.com/godbus/dbus/v5 v5.2.2
 	github.com/mdlayher/netlink v1.7.2
 	golang.org/x/sys v0.33.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10

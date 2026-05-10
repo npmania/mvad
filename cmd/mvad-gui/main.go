@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"image"
 	"image/color"
@@ -186,6 +187,10 @@ func applyTrayCmd(st *state, c trayCmd) {
 }
 
 func main() {
+	var hidden bool
+	flag.BoolVar(&hidden, "hidden", false, "start without showing the window (tray-only)")
+	flag.Parse()
+
 	var st state
 	st.filter.SingleLine = true
 	st.relayList.Axis = layout.Vertical
@@ -213,8 +218,8 @@ func main() {
 	}
 
 	pollsWin := make(chan pollResult, 1)
-	var pollsTray chan pollResult
-	var trayCmds chan trayCmd
+	pollsTray := make(chan pollResult, 1)
+	trayCmds := make(chan trayCmd)
 
 	st.cmdDone = make(chan cmdResult, 1)
 	st.relayDone = make(chan relayLoadResult, 1)
@@ -229,21 +234,51 @@ func main() {
 
 	go pollStatus(ctx, pollsWin, pollsTray)
 
+	tr, err := startTray(ctx, pollsTray, trayCmds)
+	if err != nil {
+		log.Printf("tray: %v (no SNI watcher; install snixembed for tint2/legacy trays, or AppIndicator extension for GNOME)", err)
+		tr = nil
+	}
+
 	go func() {
-		windowed := true
-		for windowed {
-			w := new(app.Window)
-			w.Option(app.Title("mvad"), app.Size(unit.Dp(420), unit.Dp(540)))
-			if err := run(w, &st, pollsWin, trayCmds); err != nil {
-				if !errors.Is(err, errQuit) {
+		defer func() {
+			cancel()
+			if tr != nil {
+				tr.shutdown()
+			}
+			os.Exit(0)
+		}()
+
+		windowed := !hidden || tr == nil
+		for {
+			if windowed {
+				w := new(app.Window)
+				w.Option(app.Title("mvad"), app.Size(unit.Dp(420), unit.Dp(540)))
+				err := run(w, &st, pollsWin, trayCmds)
+				if errors.Is(err, errQuit) {
+					return
+				}
+				if err != nil {
 					log.Fatal(err)
 				}
-				break
+				windowed = false
+				if tr == nil {
+					return
+				}
+				continue
 			}
-			windowed = false
+			select {
+			case c := <-trayCmds:
+				if c == cmdQuit {
+					return
+				}
+				applyTrayCmd(&st, c)
+				windowed = true
+			case <-pollsWin:
+			case <-ctx.Done():
+				return
+			}
 		}
-		cancel()
-		os.Exit(0)
 	}()
 	app.Main()
 }
