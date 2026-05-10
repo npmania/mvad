@@ -192,6 +192,7 @@ type state struct {
 	toggle    widget.Clickable
 
 	headerClicks map[string]*widget.Clickable
+	anyClicks    map[string]*widget.Clickable
 	rowClicks    map[string]*widget.Clickable
 
 	view viewKind
@@ -257,6 +258,8 @@ type state struct {
 
 type row struct {
 	country string
+	city    string
+	code    string
 	relay   *mullvad.Relay
 }
 
@@ -324,6 +327,7 @@ func main() {
 	st.relayList.Axis = layout.Vertical
 	st.expanded = map[string]bool{}
 	st.headerClicks = map[string]*widget.Clickable{}
+	st.anyClicks = map[string]*widget.Clickable{}
 	st.rowClicks = map[string]*widget.Clickable{}
 	st.deviceClicks = map[string]*widget.Clickable{}
 	st.deviceArmed = map[string]time.Time{}
@@ -1204,7 +1208,11 @@ func disconnectedBody(gtx layout.Context, th *material.Theme, st *state, pal pal
 		f := strings.ToLower(strings.TrimSpace(filterText))
 		keep := false
 		for i := range st.relays {
-			if st.relays[i].Hostname == st.selected && relayMatches(&st.relays[i], f) {
+			r := &st.relays[i]
+			if !relayMatches(r, f) {
+				continue
+			}
+			if r.Hostname == st.selected || strings.HasPrefix(r.Hostname, st.selected+"-") {
 				keep = true
 				break
 			}
@@ -1904,43 +1912,81 @@ func errorPlaceholder(gtx layout.Context, th *material.Theme, pal palette, msg s
 }
 
 func rowLayout(gtx layout.Context, th *material.Theme, st *state, pal palette, r row) layout.Dimensions {
-	if r.relay == nil {
-		return countryHeader(gtx, th, st, pal, r.country)
+	if r.relay != nil {
+		return relayRow(gtx, th, st, pal, r.relay)
 	}
-	return relayRow(gtx, th, st, pal, r.relay)
+	if r.city != "" {
+		return headerRow(gtx, th, st, pal, r.city, r.code, r.country+"|"+r.city, unit.Dp(12), unit.Sp(13))
+	}
+	return headerRow(gtx, th, st, pal, r.country, r.code, r.country, 0, unit.Sp(14))
 }
 
-func countryHeader(gtx layout.Context, th *material.Theme, st *state, pal palette, country string) layout.Dimensions {
-	c := st.headerClicks[country]
-	if c == nil {
-		c = &widget.Clickable{}
-		st.headerClicks[country] = c
+func headerRow(gtx layout.Context, th *material.Theme, st *state, pal palette, label, code, key string, leftPad unit.Dp, sz unit.Sp) layout.Dimensions {
+	ec := st.headerClicks[key]
+	if ec == nil {
+		ec = &widget.Clickable{}
+		st.headerClicks[key] = ec
 	}
-	if c.Clicked(gtx) {
-		st.expanded[country] = !st.expanded[country]
+	if ec.Clicked(gtx) {
+		st.expanded[key] = !st.expanded[key]
 	}
-	open := st.expanded[country] || st.filter.Text() != ""
+	ac := st.anyClicks[code]
+	if ac == nil {
+		ac = &widget.Clickable{}
+		st.anyClicks[code] = ac
+	}
+	if ac.Clicked(gtx) {
+		st.selected = code
+	}
+	open := st.expanded[key] || st.filter.Text() != ""
 	glyph := "▸"
 	if open {
 		glyph = "▾"
 	}
-	return c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		gtx.Constraints.Min.X = gtx.Constraints.Max.X
-		return layout.Inset{Top: unit.Dp(6), Bottom: unit.Dp(6)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
-				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-					lbl := material.Label(th, unit.Sp(14), country)
-					lbl.Color = pal.fg
-					return lbl.Layout(gtx)
-				}),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					lbl := material.Label(th, unit.Sp(14), glyph)
-					lbl.Color = pal.muted
-					return lbl.Layout(gtx)
-				}),
-			)
-		})
-	})
+	selected := st.selected == code
+	return layout.Stack{}.Layout(gtx,
+		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+			return layout.Inset{Left: leftPad, Top: unit.Dp(6), Bottom: unit.Dp(6)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						return ec.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							gtx.Constraints.Min.X = gtx.Constraints.Max.X
+							lbl := material.Label(th, sz, label)
+							lbl.Color = pal.fg
+							return lbl.Layout(gtx)
+						})
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ac.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							return layout.Inset{Left: unit.Dp(8), Right: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+								lbl := material.Label(th, unit.Sp(12), "Any")
+								if selected {
+									lbl.Color = pal.accent
+								} else {
+									lbl.Color = pal.muted
+								}
+								return lbl.Layout(gtx)
+							})
+						})
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						lbl := material.Label(th, sz, glyph)
+						lbl.Color = pal.muted
+						return lbl.Layout(gtx)
+					}),
+				)
+			})
+		}),
+		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+			if !selected {
+				return layout.Dimensions{}
+			}
+			bar := image.Pt(gtx.Dp(2), gtx.Constraints.Min.Y)
+			paint.FillShape(gtx.Ops, pal.accent, clip.Rect{Max: bar}.Op())
+			return layout.Dimensions{Size: bar}
+		}),
+	)
 }
 
 func relayRow(gtx layout.Context, th *material.Theme, st *state, pal palette, r *mullvad.Relay) layout.Dimensions {
@@ -1957,19 +2003,10 @@ func relayRow(gtx layout.Context, th *material.Theme, st *state, pal palette, r 
 		gtx.Constraints.Min.X = gtx.Constraints.Max.X
 		return layout.Stack{}.Layout(gtx,
 			layout.Stacked(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Left: unit.Dp(10), Top: unit.Dp(4), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
-						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							lbl := material.Label(th, unit.Sp(13), r.Hostname)
-							lbl.Color = pal.fg
-							return lbl.Layout(gtx)
-						}),
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							lbl := material.Label(th, unit.Sp(12), r.City)
-							lbl.Color = pal.muted
-							return lbl.Layout(gtx)
-						}),
-					)
+				return layout.Inset{Left: unit.Dp(24), Top: unit.Dp(4), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Label(th, unit.Sp(13), r.Hostname)
+					lbl.Color = pal.fg
+					return lbl.Layout(gtx)
 				})
 			}),
 			layout.Expanded(func(gtx layout.Context) layout.Dimensions {
@@ -1985,13 +2022,17 @@ func relayRow(gtx layout.Context, th *material.Theme, st *state, pal palette, r 
 }
 
 func reconnectLink(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
-	if st.cfg.LastRelay == "" {
+	target := st.cfg.LastQuery
+	if target == "" {
+		target = st.cfg.LastRelay
+	}
+	if target == "" {
 		return layout.Dimensions{}
 	}
 	if st.running {
 		gtx = gtx.Disabled()
 	}
-	label := "Reconnect to " + st.cfg.LastRelay
+	label := "Reconnect to " + target
 	if st.runningName == "reconnect" {
 		label += "…"
 	}
@@ -2140,16 +2181,42 @@ func buildRows(relays []mullvad.Relay, expanded map[string]bool, filter string) 
 	})
 	var out []row
 	for _, c := range names {
-		out = append(out, row{country: c})
+		items := groups[c]
+		parts := strings.SplitN(items[0].Hostname, "-", 3)
+		ccode := parts[0]
+		out = append(out, row{country: c, code: ccode})
 		if !expanded[c] && f == "" {
 			continue
 		}
-		items := groups[c]
-		sort.Slice(items, func(i, j int) bool {
-			return items[i].Hostname < items[j].Hostname
-		})
+		bycity := map[string][]*mullvad.Relay{}
 		for _, r := range items {
-			out = append(out, row{country: c, relay: r})
+			bycity[r.City] = append(bycity[r.City], r)
+		}
+		cnames := make([]string, 0, len(bycity))
+		for ci := range bycity {
+			cnames = append(cnames, ci)
+		}
+		sort.Slice(cnames, func(i, j int) bool {
+			return strings.ToLower(cnames[i]) < strings.ToLower(cnames[j])
+		})
+		for _, ci := range cnames {
+			cir := bycity[ci]
+			cparts := strings.SplitN(cir[0].Hostname, "-", 3)
+			code := ccode
+			if len(cparts) > 1 {
+				code = ccode + "-" + cparts[1]
+			}
+			out = append(out, row{country: c, city: ci, code: code})
+			ckey := c + "|" + ci
+			if !expanded[ckey] && f == "" {
+				continue
+			}
+			sort.Slice(cir, func(i, j int) bool {
+				return cir[i].Hostname < cir[j].Hostname
+			})
+			for _, r := range cir {
+				out = append(out, row{country: c, city: ci, relay: r})
+			}
 		}
 	}
 	return out
