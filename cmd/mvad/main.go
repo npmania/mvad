@@ -26,6 +26,7 @@ import (
 	"github.com/npmania/mvad/internal/config"
 	"github.com/npmania/mvad/internal/dns"
 	"github.com/npmania/mvad/internal/firewall"
+	"github.com/npmania/mvad/internal/lock"
 	"github.com/npmania/mvad/internal/lockdown"
 	"github.com/npmania/mvad/internal/mullvad"
 	"github.com/npmania/mvad/internal/notify"
@@ -588,6 +589,11 @@ func connect(args []string) (retErr error) {
 	if os.Geteuid() != 0 {
 		return errors.New("this command needs root; rerun with sudo")
 	}
+	release, err := lock.AcquireRoot()
+	if err != nil {
+		return err
+	}
+	defer release()
 	var relay string
 	defer func() {
 		var uerr *usageError
@@ -784,6 +790,11 @@ func reconnect(args []string) error {
 	if os.Geteuid() != 0 {
 		return errors.New("this command needs root; rerun with sudo")
 	}
+	release, err := lock.AcquireRoot()
+	if err != nil {
+		return err
+	}
+	defer release()
 	fs := flag.NewFlagSet("reconnect", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	allowLAN := fs.Bool("allow-lan", false, "allow traffic to private LAN ranges")
@@ -835,6 +846,11 @@ func disconnect(args []string) error {
 	if len(args) != 0 {
 		return usagef(usageDisconnect)
 	}
+	release, err := lock.AcquireRoot()
+	if err != nil {
+		return err
+	}
+	defer release()
 	var endpoint netip.Addr
 	if cfg, err := config.Load(); err == nil {
 		endpoint = cfg.LastEndpoint.Addr()
@@ -875,6 +891,11 @@ func lockdownOn(args []string) error {
 	if len(args) != 0 {
 		return usagef(usageLockdownOn)
 	}
+	release, err := lock.AcquireRoot()
+	if err != nil {
+		return err
+	}
+	defer release()
 	ips, err := loadRelayIPs()
 	if err != nil {
 		return err
@@ -893,6 +914,11 @@ func lockdownOff(args []string) error {
 	if len(args) != 0 {
 		return usagef(usageLockdownOff)
 	}
+	release, err := lock.AcquireRoot()
+	if err != nil {
+		return err
+	}
+	defer release()
 	return lockdown.Off()
 }
 
@@ -907,6 +933,11 @@ func lockdownRefresh(args []string) error {
 	if len(args) != 0 {
 		return usagef(usageLockdownRefresh)
 	}
+	release, err := lock.AcquireRoot()
+	if err != nil {
+		return err
+	}
+	defer release()
 	ips, err := loadRelayIPs()
 	if err != nil {
 		return err
