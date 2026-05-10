@@ -1886,7 +1886,9 @@ func reconnectLink(gtx layout.Context, th *material.Theme, st *state, pal palett
 
 func actionButton(gtx layout.Context, th *material.Theme, btn *widget.Clickable, pal palette, label string, disabled bool, busy bool) layout.Dimensions {
 	if busy {
-		label += "…"
+		n := int((gtx.Now.UnixNano()/int64(500*time.Millisecond))%3) + 1
+		label += strings.Repeat(".", n)
+		gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(500 * time.Millisecond)})
 	}
 	if disabled {
 		gtx = gtx.Disabled()
