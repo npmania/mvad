@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -704,10 +705,22 @@ func pollStatus(ctx context.Context, w *app.Window, snaps chan<- status.JSONOut,
 	}
 }
 
+func mvadPath() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "mvad"
+	}
+	p := filepath.Join(filepath.Dir(exe), "mvad")
+	if _, err := os.Stat(p); err != nil {
+		return "mvad"
+	}
+	return p
+}
+
 func readStatus(ctx context.Context) (status.JSONOut, error) {
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(cctx, "mvad", "status", "--format=json").Output()
+	out, err := exec.CommandContext(cctx, mvadPath(), "status", "--format=json").Output()
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
@@ -729,6 +742,7 @@ type cmdResult struct {
 }
 
 func runCmd(ctx context.Context, w *app.Window, done chan<- cmdResult, args ...string) {
+	// pkexec must invoke the path the polkit policy is keyed on.
 	full := append([]string{"mvad"}, args...)
 	out, err := exec.CommandContext(ctx, "pkexec", full...).CombinedOutput()
 	select {
@@ -750,7 +764,7 @@ func loadRelays(ctx context.Context, w *app.Window, refresh bool, done chan<- re
 	}
 	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(cctx, "mvad", args...).Output()
+	out, err := exec.CommandContext(cctx, mvadPath(), args...).Output()
 	var res relayLoadResult
 	if err != nil {
 		var ee *exec.ExitError
