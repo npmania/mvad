@@ -805,6 +805,8 @@ func doConnect(opts connectOpts) (retErr error) {
 	}
 	cfg.LastRelay = exit.Hostname
 	cfg.LastEntryRelay = entryHost
+	cfg.LastQuery = opts.relay
+	cfg.LastVia = opts.via
 	cfg.LastEndpoint = endpoint
 	cfg.LastTransport = ""
 	cfg.LastTransportPort = 0
@@ -913,12 +915,20 @@ func reconnect(args []string) error {
 	if err != nil {
 		return err
 	}
-	if cfg.LastRelay == "" {
+	relay := cfg.LastQuery
+	if relay == "" {
+		relay = cfg.LastRelay
+	}
+	if relay == "" {
 		return errors.New("no previous connection to reconnect to")
 	}
+	via := cfg.LastVia
+	if via == "" {
+		via = cfg.LastEntryRelay
+	}
 	opts := connectOpts{
-		relay:     cfg.LastRelay,
-		via:       cfg.LastEntryRelay,
+		relay:     relay,
+		via:       via,
 		allowLAN:  *allowLAN,
 		transport: "wireguard",
 	}
@@ -1288,7 +1298,7 @@ func ssAlive(pid int) bool {
 	return filepath.Base(target) == "ss-local"
 }
 
-func pickRelay(cfg *config.Config, name string) (mullvad.Relay, error) {
+func pickRelay(cfg *config.Config, query string) (mullvad.Relay, error) {
 	if len(cfg.RelayCache) == 0 {
 		return mullvad.Relay{}, errors.New("no cached relays; run mvad relays")
 	}
@@ -1296,10 +1306,5 @@ func pickRelay(cfg *config.Config, name string) (mullvad.Relay, error) {
 	if err := json.Unmarshal(cfg.RelayCache, &relays); err != nil {
 		return mullvad.Relay{}, err
 	}
-	for _, r := range relays {
-		if r.Hostname == name {
-			return r, nil
-		}
-	}
-	return mullvad.Relay{}, fmt.Errorf("relay %q not found", name)
+	return mullvad.Pick(relays, query)
 }

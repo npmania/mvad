@@ -22,6 +22,8 @@ type Config struct {
 	DeviceIPv6        netip.Prefix    `json:"device_ipv6,omitzero"`
 	LastRelay         string          `json:"last_relay,omitempty"`
 	LastEntryRelay    string          `json:"last_entry_relay,omitempty"`
+	LastQuery         string          `json:"last_query,omitempty"`
+	LastVia           string          `json:"last_via,omitempty"`
 	LastEndpoint      netip.AddrPort  `json:"last_endpoint,omitzero"`
 	LastTransport     string          `json:"last_transport,omitempty"`
 	LastTransportPort uint16          `json:"last_transport_port,omitempty"`

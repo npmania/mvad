@@ -9,8 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 
@@ -429,6 +431,34 @@ func (c *Client) do(req *http.Request, out any) error {
 		return nil
 	}
 	return json.NewDecoder(body).Decode(out)
+}
+
+// Pick selects a relay matching query. With 3+ segments query is a
+// full hostname; with 1 or 2 segments it is a country or country-city
+// prefix and Pick returns a random active match.
+func Pick(relays []Relay, query string) (Relay, error) {
+	if query == "" {
+		return Relay{}, errors.New("mullvad: empty relay query")
+	}
+	if strings.Count(query, "-") >= 2 {
+		for _, r := range relays {
+			if r.Hostname == query {
+				return r, nil
+			}
+		}
+		return Relay{}, fmt.Errorf("mullvad: relay %q not found", query)
+	}
+	prefix := query + "-"
+	var match []Relay
+	for _, r := range relays {
+		if r.Active && strings.HasPrefix(r.Hostname, prefix) {
+			match = append(match, r)
+		}
+	}
+	if len(match) == 0 {
+		return Relay{}, fmt.Errorf("mullvad: no relays match %q", query)
+	}
+	return match[rand.IntN(len(match))], nil
 }
 
 func truncate(s string, n int) string {

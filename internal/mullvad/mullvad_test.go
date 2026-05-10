@@ -311,6 +311,53 @@ func TestRevokeDevice(t *testing.T) {
 	}
 }
 
+func TestPick(t *testing.T) {
+	relays := []Relay{
+		{Hostname: "us-nyc-wg-001", Active: true},
+		{Hostname: "us-nyc-wg-002", Active: true},
+		{Hostname: "us-nyc-wg-003", Active: false},
+		{Hostname: "us-lax-wg-001", Active: true},
+		{Hostname: "se-sto-wg-001", Active: true},
+	}
+	r, err := Pick(relays, "us-nyc-wg-001")
+	if err != nil || r.Hostname != "us-nyc-wg-001" {
+		t.Errorf("exact: %+v, %v", r, err)
+	}
+	if r, err := Pick(relays, "us-nyc-wg-003"); err != nil || r.Hostname != "us-nyc-wg-003" {
+		t.Errorf("exact inactive: %+v, %v", r, err)
+	}
+	for range 20 {
+		r, err := Pick(relays, "us-nyc")
+		if err != nil {
+			t.Fatalf("city: %v", err)
+		}
+		if !strings.HasPrefix(r.Hostname, "us-nyc-") || !r.Active {
+			t.Errorf("city pick = %+v", r)
+		}
+	}
+	for range 20 {
+		r, err := Pick(relays, "us")
+		if err != nil {
+			t.Fatalf("country: %v", err)
+		}
+		if !strings.HasPrefix(r.Hostname, "us-") || !r.Active {
+			t.Errorf("country pick = %+v", r)
+		}
+	}
+	if _, err := Pick(relays, ""); err == nil {
+		t.Error("empty: want error")
+	}
+	if _, err := Pick(relays, "xx"); err == nil {
+		t.Error("no country match: want error")
+	}
+	if _, err := Pick(relays, "us-zzz"); err == nil {
+		t.Error("no city match: want error")
+	}
+	if _, err := Pick(relays, "us-nyc-wg-999"); err == nil {
+		t.Error("missing hostname: want error")
+	}
+}
+
 func TestUnauthorizedRetry(t *testing.T) {
 	var tokenCalls, meCalls atomic.Int32
 	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
