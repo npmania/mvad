@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -605,11 +606,16 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 				}
 			}
 		case r := <-st.runDone:
+			found := false
 			for i, c := range st.runStarting {
 				if c == r.cmdline {
 					st.runStarting = append(st.runStarting[:i], st.runStarting[i+1:]...)
+					found = true
 					break
 				}
+			}
+			if !found {
+				break
 			}
 			st.cmdName = "run"
 			st.cmdOut = r.out
@@ -2421,12 +2427,31 @@ func readComm(pid int) string {
 
 func runOutside(ctx context.Context, w *app.Window, done chan<- runResult, cmdline string, args ...string) {
 	full := append([]string{"mvad"}, args...)
-	out, err := exec.CommandContext(ctx, "pkexec", full...).CombinedOutput()
-	select {
-	case done <- runResult{cmdline: cmdline, out: string(out), err: err}:
-	case <-ctx.Done():
+	cmd := exec.CommandContext(ctx, "pkexec", full...)
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	send := func(r runResult) {
+		select {
+		case done <- r:
+		case <-ctx.Done():
+		}
+		w.Invalidate()
 	}
-	w.Invalidate()
+	if err := cmd.Start(); err != nil {
+		send(runResult{cmdline: cmdline, err: err})
+		return
+	}
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- cmd.Wait() }()
+	select {
+	case err := <-waitDone:
+		send(runResult{cmdline: cmdline, out: buf.String(), err: err})
+	case <-time.After(time.Second):
+		send(runResult{cmdline: cmdline})
+		err := <-waitDone
+		send(runResult{cmdline: cmdline, out: buf.String(), err: err})
+	}
 }
 
 func splitBody(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
