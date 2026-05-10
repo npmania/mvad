@@ -30,6 +30,8 @@ type Config struct {
 	RelaysFetchedAt   time.Time       `json:"relays_fetched_at,omitzero"`
 	AccountExpiry     time.Time       `json:"account_expiry,omitzero"`
 	DeviceName        string          `json:"device_name,omitempty"`
+	AllowLAN          bool            `json:"allow_lan,omitempty"`
+	LockdownOn        bool            `json:"lockdown_on,omitempty"`
 }
 
 func path() (string, error) {

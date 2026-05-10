@@ -28,6 +28,7 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 
+	"github.com/npmania/mvad/internal/config"
 	"github.com/npmania/mvad/internal/mullvad"
 	"github.com/npmania/mvad/internal/status"
 )
@@ -55,15 +56,26 @@ var (
 	}
 )
 
+type viewKind int
+
+const (
+	viewConnect viewKind = iota
+	viewSettings
+	viewAccount
+)
+
 type state struct {
-	snap      status.JSONOut
-	pollErr   error
-	cmdOut    string
-	cmdErr    error
-	cmdName   string
-	running   bool
-	loadedAny bool
-	dark      bool
+	snap        status.JSONOut
+	pollErr     error
+	cmdOut      string
+	cmdErr      error
+	cmdName     string
+	running     bool
+	runningName string
+	loadedAny   bool
+	dark        bool
+
+	cfg *config.Config
 
 	filter       widget.Editor
 	relayList    widget.List
@@ -79,6 +91,18 @@ type state struct {
 
 	headerClicks map[string]*widget.Clickable
 	rowClicks    map[string]*widget.Clickable
+
+	view viewKind
+
+	allowLAN   widget.Bool
+	lockdownOn widget.Bool
+	transport  string
+
+	tabConn, tabSet, tabAcct widget.Clickable
+	trWG, trTCP              widget.Clickable
+	openAcct                 widget.Clickable
+	logout                   widget.Clickable
+	logoutArmed              time.Time
 }
 
 type row struct {
@@ -109,6 +133,18 @@ func run(w *app.Window) error {
 	st.headerClicks = map[string]*widget.Clickable{}
 	st.rowClicks = map[string]*widget.Clickable{}
 
+	cfg, err := config.Load()
+	if err != nil || cfg == nil {
+		cfg = &config.Config{}
+	}
+	st.cfg = cfg
+	st.allowLAN.Value = cfg.AllowLAN
+	st.lockdownOn.Value = cfg.LockdownOn
+	st.transport = cfg.LastTransport
+	if st.transport != "tcp" {
+		st.transport = "wireguard"
+	}
+
 	snaps := make(chan status.JSONOut, 1)
 	pollErrs := make(chan error, 1)
 	cmdDone := make(chan cmdResult, 1)
@@ -132,10 +168,28 @@ func run(w *app.Window) error {
 			st.pollErr = err
 			st.loadedAny = true
 		case r := <-cmdDone:
-			st.running = false
+			if r.name != "xdg-open" {
+				st.running = false
+				st.runningName = ""
+			}
 			st.cmdName = r.name
 			st.cmdOut = r.out
 			st.cmdErr = r.err
+			switch r.name {
+			case "lockdown":
+				if r.err == nil {
+					st.cfg.LockdownOn = st.lockdownOn.Value
+					_ = st.cfg.Save()
+				} else {
+					st.lockdownOn.Value = !st.lockdownOn.Value
+				}
+			case "logout":
+				if r.err == nil {
+					if c, err := config.Load(); err == nil && c != nil {
+						st.cfg = c
+					}
+				}
+			}
 		case r := <-relayDone:
 			st.relayLoading = false
 			if r.err != nil {
@@ -156,22 +210,84 @@ func run(w *app.Window) error {
 			if st.toggle.Clicked(gtx) {
 				st.dark = !st.dark
 			}
+			if st.tabConn.Clicked(gtx) {
+				st.view = viewConnect
+			}
+			if st.tabSet.Clicked(gtx) {
+				st.view = viewSettings
+			}
+			if st.tabAcct.Clicked(gtx) {
+				st.view = viewAccount
+			}
 			if !st.relayLoading && st.refresh.Clicked(gtx) {
 				st.relayLoading = true
 				go loadRelays(ctx, w, true, relayDone)
+			}
+			if st.allowLAN.Update(gtx) {
+				st.cfg.AllowLAN = st.allowLAN.Value
+				_ = st.cfg.Save()
+			}
+			if st.lockdownOn.Update(gtx) {
+				if st.running {
+					st.lockdownOn.Value = !st.lockdownOn.Value
+				} else {
+					st.cmdErr = nil
+					st.cmdOut = ""
+					st.running = true
+					st.runningName = "lockdown"
+					sub := "off"
+					if st.lockdownOn.Value {
+						sub = "on"
+					}
+					go runCmd(ctx, w, cmdDone, "lockdown", sub)
+				}
+			}
+			if st.trWG.Clicked(gtx) {
+				st.transport = "wireguard"
+			}
+			if st.trTCP.Clicked(gtx) {
+				st.transport = "tcp"
+			}
+			if st.openAcct.Clicked(gtx) {
+				go runExternal(ctx, w, cmdDone, "xdg-open", "https://mullvad.net/account")
 			}
 			if !st.running && st.btn.Clicked(gtx) {
 				if st.snap.Connected {
 					st.cmdErr = nil
 					st.cmdOut = ""
 					st.running = true
+					st.runningName = "disconnect"
 					go runCmd(ctx, w, cmdDone, "disconnect")
 				} else if st.selected != "" {
 					st.cmdErr = nil
 					st.cmdOut = ""
 					st.running = true
-					go runCmd(ctx, w, cmdDone, "connect", "--", st.selected)
+					st.runningName = "connect"
+					args := []string{"connect"}
+					if st.allowLAN.Value {
+						args = append(args, "--allow-lan")
+					}
+					if st.transport == "tcp" {
+						args = append(args, "--transport=tcp")
+					}
+					args = append(args, "--", st.selected)
+					go runCmd(ctx, w, cmdDone, args...)
 				}
+			}
+			if !st.running && st.logout.Clicked(gtx) {
+				if !st.logoutArmed.IsZero() && time.Since(st.logoutArmed) < 5*time.Second {
+					st.logoutArmed = time.Time{}
+					st.cmdErr = nil
+					st.cmdOut = ""
+					st.running = true
+					st.runningName = "logout"
+					go runCmd(ctx, w, cmdDone, "logout")
+				} else {
+					st.logoutArmed = time.Now()
+				}
+			}
+			if !st.logoutArmed.IsZero() && time.Since(st.logoutArmed) >= 5*time.Second {
+				st.logoutArmed = time.Time{}
 			}
 
 			layoutUI(gtx, th, &st)
@@ -200,7 +316,15 @@ func layoutUI(gtx layout.Context, th *material.Theme, st *state) {
 	layout.Stack{}.Layout(gtx,
 		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
 			return layout.UniformInset(unit.Dp(24)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return contentBody(gtx, th, st, pal)
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return tabStrip(gtx, th, st, pal)
+					}),
+					layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
+					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						return panelBody(gtx, th, st, pal)
+					}),
+				)
 			})
 		}),
 		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
@@ -213,11 +337,58 @@ func layoutUI(gtx layout.Context, th *material.Theme, st *state) {
 	)
 }
 
-func contentBody(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
+func panelBody(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
+	switch st.view {
+	case viewSettings:
+		return settingsBody(gtx, th, st, pal)
+	case viewAccount:
+		return accountBody(gtx, th, st, pal)
+	}
 	if st.snap.Connected {
 		return connectedBody(gtx, th, st, pal)
 	}
 	return disconnectedBody(gtx, th, st, pal)
+}
+
+func tabStrip(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
+	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return tab(gtx, th, &st.tabConn, pal, "Connect", st.view == viewConnect)
+		}),
+		layout.Rigid(layout.Spacer{Width: unit.Dp(16)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return tab(gtx, th, &st.tabSet, pal, "Settings", st.view == viewSettings)
+		}),
+		layout.Rigid(layout.Spacer{Width: unit.Dp(16)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return tab(gtx, th, &st.tabAcct, pal, "Account", st.view == viewAccount)
+		}),
+	)
+}
+
+func tab(gtx layout.Context, th *material.Theme, c *widget.Clickable, pal palette, label string, active bool) layout.Dimensions {
+	return c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Label(th, unit.Sp(14), label)
+			lbl.Color = pal.muted
+			if active {
+				lbl.Color = pal.fg
+			}
+			macro := op.Record(gtx.Ops)
+			dims := lbl.Layout(gtx)
+			call := macro.Stop()
+			call.Add(gtx.Ops)
+			h := dims.Size.Y
+			if active {
+				gap := gtx.Dp(2)
+				push := op.Offset(image.Pt(0, dims.Size.Y+gap)).Push(gtx.Ops)
+				paint.FillShape(gtx.Ops, pal.accent, clip.Rect{Max: image.Pt(dims.Size.X, gtx.Dp(1))}.Op())
+				push.Pop()
+				h += gap + gtx.Dp(1)
+			}
+			return layout.Dimensions{Size: image.Pt(dims.Size.X, h)}
+		})
+	})
 }
 
 func connectedBody(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
@@ -247,7 +418,7 @@ func connectedBody(gtx layout.Context, th *material.Theme, st *state, pal palett
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(28)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return actionButton(gtx, th, st, pal, "Disconnect", false)
+			return actionButton(gtx, th, &st.btn, pal, "Disconnect", st.running, st.runningName == "disconnect")
 		}),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			return layout.Dimensions{Size: gtx.Constraints.Min}
@@ -293,12 +464,228 @@ func disconnectedBody(gtx layout.Context, th *material.Theme, st *state, pal pal
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(28)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return actionButton(gtx, th, st, pal, "Connect", btnDisabled)
+			return actionButton(gtx, th, &st.btn, pal, "Connect", btnDisabled, st.runningName == "connect")
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return footer(gtx, th, st, pal)
 		}),
 	)
+}
+
+func settingsBody(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return settingsRow(gtx, th, pal, "Allow LAN", "", &st.allowLAN)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return transportSection(gtx, th, st, pal)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return settingsRow(gtx, th, pal, "Lockdown", "persistent kill-switch", &st.lockdownOn)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if !st.snap.Connected {
+				return layout.Dimensions{}
+			}
+			return layout.Inset{Top: unit.Dp(20)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Label(th, unit.Sp(12), "applies on next connect")
+				lbl.Color = pal.muted
+				return lbl.Layout(gtx)
+			})
+		}),
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			return layout.Dimensions{Size: gtx.Constraints.Min}
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return footer(gtx, th, st, pal)
+		}),
+	)
+}
+
+func settingsRow(gtx layout.Context, th *material.Theme, pal palette, title, sub string, b *widget.Bool) layout.Dimensions {
+	return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			children := []layout.FlexChild{
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Label(th, unit.Sp(14), title)
+					lbl.Color = pal.fg
+					return lbl.Layout(gtx)
+				}),
+			}
+			if sub != "" {
+				children = append(children,
+					layout.Rigid(layout.Spacer{Height: unit.Dp(2)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						lbl := material.Label(th, unit.Sp(12), sub)
+						lbl.Color = pal.muted
+						return lbl.Layout(gtx)
+					}),
+				)
+			}
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return togglePill(gtx, b, pal)
+		}),
+	)
+}
+
+func transportSection(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Label(th, unit.Sp(14), "Transport")
+			lbl.Color = pal.fg
+			return lbl.Layout(gtx)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return transportLabel(gtx, th, &st.trWG, pal, "wireguard", st.transport == "wireguard")
+				}),
+				layout.Rigid(layout.Spacer{Width: unit.Dp(16)}.Layout),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return transportLabel(gtx, th, &st.trTCP, pal, "tcp", st.transport == "tcp")
+				}),
+			)
+		}),
+	)
+}
+
+func transportLabel(gtx layout.Context, th *material.Theme, c *widget.Clickable, pal palette, label string, active bool) layout.Dimensions {
+	return c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		lbl := material.Label(th, unit.Sp(13), label)
+		lbl.Color = pal.muted
+		if active {
+			lbl.Color = pal.fg
+		}
+		macro := op.Record(gtx.Ops)
+		dims := lbl.Layout(gtx)
+		call := macro.Stop()
+		call.Add(gtx.Ops)
+		h := dims.Size.Y
+		if active {
+			gap := gtx.Dp(2)
+			push := op.Offset(image.Pt(0, dims.Size.Y+gap)).Push(gtx.Ops)
+			paint.FillShape(gtx.Ops, pal.accent, clip.Rect{Max: image.Pt(dims.Size.X, gtx.Dp(1))}.Op())
+			push.Pop()
+			h += gap + gtx.Dp(1)
+		}
+		return layout.Dimensions{Size: image.Pt(dims.Size.X, h)}
+	})
+}
+
+func togglePill(gtx layout.Context, b *widget.Bool, pal palette) layout.Dimensions {
+	return b.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		w, h := gtx.Dp(28), gtx.Dp(14)
+		track := pal.dim
+		if b.Value {
+			track = pal.accent
+		}
+		rr := clip.UniformRRect(image.Rectangle{Max: image.Pt(w, h)}, h/2)
+		paint.FillShape(gtx.Ops, track, clip.Stroke{Path: rr.Path(gtx.Ops), Width: float32(max(gtx.Dp(1), 1))}.Op())
+		d := h - gtx.Dp(4)
+		x := gtx.Dp(2)
+		if b.Value {
+			x = w - d - gtx.Dp(2)
+		}
+		y := (h - d) / 2
+		knob := image.Rectangle{Min: image.Pt(x, y), Max: image.Pt(x+d, y+d)}
+		knobRR := clip.UniformRRect(knob, d/2)
+		if b.Value {
+			paint.FillShape(gtx.Ops, pal.accent, knobRR.Op(gtx.Ops))
+		} else {
+			paint.FillShape(gtx.Ops, pal.muted, clip.Stroke{Path: knobRR.Path(gtx.Ops), Width: float32(max(gtx.Dp(1), 1))}.Op())
+		}
+		return layout.Dimensions{Size: image.Pt(w, h)}
+	})
+}
+
+func accountBody(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
+	cfg := st.cfg
+	loggedIn := cfg.DeviceID != ""
+
+	var children []layout.FlexChild
+	if !loggedIn {
+		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Label(th, unit.Sp(13), "no account on this device")
+			lbl.Color = pal.muted
+			return lbl.Layout(gtx)
+		}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
+		)
+	} else {
+		expText := "expiry unknown"
+		if !cfg.AccountExpiry.IsZero() {
+			if time.Until(cfg.AccountExpiry) <= 0 {
+				expText = "account expired"
+			} else {
+				expText = "expires " + status.HumanExpiry(cfg.AccountExpiry)
+			}
+		}
+		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Label(th, unit.Sp(14), expText)
+			lbl.Color = pal.fg
+			return lbl.Layout(gtx)
+		}))
+		if cfg.DeviceName != "" {
+			children = append(children,
+				layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Label(th, unit.Sp(13), "device  "+cfg.DeviceName)
+					lbl.Color = pal.muted
+					return lbl.Layout(gtx)
+				}),
+			)
+		}
+		children = append(children,
+			layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return hairline(gtx, pal.dim)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
+		)
+	}
+	children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+		return st.openAcct.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Label(th, unit.Sp(14), "Open account page ↗")
+			lbl.Color = pal.accent
+			return lbl.Layout(gtx)
+		})
+	}))
+	if loggedIn {
+		label := "Logout"
+		if !st.logoutArmed.IsZero() && time.Since(st.logoutArmed) < 5*time.Second {
+			label = "Confirm?"
+		}
+		children = append(children,
+			layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return hairline(gtx, pal.dim)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(28)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return actionButton(gtx, th, &st.logout, pal, label, st.running, st.runningName == "logout")
+			}),
+		)
+	}
+	children = append(children,
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			return layout.Dimensions{Size: gtx.Constraints.Min}
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return footer(gtx, th, st, pal)
+		}),
+	)
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+}
+
+func hairline(gtx layout.Context, c color.NRGBA) layout.Dimensions {
+	sz := image.Pt(gtx.Constraints.Max.X, max(gtx.Dp(1), 1))
+	paint.FillShape(gtx.Ops, c, clip.Rect{Max: sz}.Op())
+	return layout.Dimensions{Size: sz}
 }
 
 func headline(st *state, pal palette) (string, color.NRGBA) {
@@ -527,9 +914,8 @@ func relayRow(gtx layout.Context, th *material.Theme, st *state, pal palette, r 
 	})
 }
 
-func actionButton(gtx layout.Context, th *material.Theme, st *state, pal palette, label string, disabled bool) layout.Dimensions {
-	if st.running {
-		disabled = true
+func actionButton(gtx layout.Context, th *material.Theme, btn *widget.Clickable, pal palette, label string, disabled bool, busy bool) layout.Dimensions {
+	if busy {
 		label += "…"
 	}
 	if disabled {
@@ -537,7 +923,7 @@ func actionButton(gtx layout.Context, th *material.Theme, st *state, pal palette
 	}
 	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		gtx.Constraints.Max.X = gtx.Dp(140)
-		return st.btn.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return btn.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			macro := op.Record(gtx.Ops)
 			dims := layout.UniformInset(unit.Dp(10)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -747,6 +1133,15 @@ func runCmd(ctx context.Context, w *app.Window, done chan<- cmdResult, args ...s
 	out, err := exec.CommandContext(ctx, "pkexec", full...).CombinedOutput()
 	select {
 	case done <- cmdResult{name: args[0], out: string(out), err: err}:
+	case <-ctx.Done():
+	}
+	w.Invalidate()
+}
+
+func runExternal(ctx context.Context, w *app.Window, done chan<- cmdResult, name string, args ...string) {
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	select {
+	case done <- cmdResult{name: name, out: string(out), err: err}:
 	case <-ctx.Done():
 	}
 	w.Invalidate()
