@@ -73,6 +73,20 @@ func usagef(format string, args ...any) error {
 	return &usageError{msg: fmt.Sprintf(format, args...)}
 }
 
+type exitErr struct {
+	code int
+	err  error
+}
+
+func (e *exitErr) Error() string {
+	if e.err == nil {
+		return fmt.Sprintf("exit %d", e.code)
+	}
+	return e.err.Error()
+}
+
+func (e *exitErr) Unwrap() error { return e.err }
+
 func main() {
 	flag.Usage = func() { fmt.Fprint(os.Stderr, usageText) }
 	flag.Parse()
@@ -125,6 +139,13 @@ func main() {
 	if errors.As(err, &uerr) {
 		fmt.Fprintln(os.Stderr, "mvad:", uerr.msg)
 		os.Exit(2)
+	}
+	var xerr *exitErr
+	if errors.As(err, &xerr) {
+		if xerr.err != nil {
+			fmt.Fprintln(os.Stderr, "mvad:", xerr.err)
+		}
+		os.Exit(xerr.code)
 	}
 	fmt.Fprintln(os.Stderr, "mvad:", err)
 	os.Exit(1)
@@ -780,24 +801,43 @@ func loadRelayIPs() ([]netip.Addr, error) {
 }
 
 func showStatus(args []string) error {
-	if len(args) != 0 {
-		return usagef("usage: mvad status")
+	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	format := fs.String("format", "", "output format: json or waybar")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+		return usagef("usage: mvad status [--format json|waybar]")
+	}
+	switch *format {
+	case "", "json", "waybar":
+	default:
+		return usagef("--format: must be json or waybar")
 	}
 	cfg, err := config.Load()
 	if err != nil {
-		return err
+		return &exitErr{code: 2, err: err}
 	}
 	s, err := status.Read(ifname)
-	if errors.Is(err, status.ErrNotConnected) {
-		fmt.Print(status.Plain(s))
-		return nil
-	}
-	if err != nil {
-		return err
+	if err != nil && !errors.Is(err, status.ErrNotConnected) {
+		return &exitErr{code: 2, err: err}
 	}
 	s.Relay = cfg.LastRelay
 	s.Entry = cfg.LastEntryRelay
-	fmt.Print(status.Plain(s))
+	var out string
+	switch *format {
+	case "json":
+		out, err = status.JSON(s)
+	case "waybar":
+		out, err = status.Waybar(s)
+	default:
+		out = status.Plain(s)
+	}
+	if err != nil {
+		return &exitErr{code: 2, err: err}
+	}
+	fmt.Print(out)
+	if !s.Up {
+		return &exitErr{code: 1}
+	}
 	return nil
 }
 

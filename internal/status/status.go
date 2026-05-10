@@ -3,6 +3,7 @@
 package status
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -49,6 +50,81 @@ func Plain(s Snapshot) string {
 	return fmt.Sprintf("connected to %s%s, last handshake %s ago\n", name, via, humanDuration(time.Since(s.LastHandshake)))
 }
 
+type jsonOut struct {
+	Connected     bool   `json:"connected"`
+	Relay         string `json:"relay,omitempty"`
+	Entry         string `json:"entry,omitempty"`
+	Endpoint      string `json:"endpoint,omitempty"`
+	OperState     string `json:"operstate,omitempty"`
+	Iface         string `json:"iface,omitempty"`
+	RxBytes       int64  `json:"rx_bytes,omitempty"`
+	TxBytes       int64  `json:"tx_bytes,omitempty"`
+	LastHandshake string `json:"last_handshake,omitempty"`
+}
+
+func JSON(s Snapshot) (string, error) {
+	o := jsonOut{
+		Connected: s.Up,
+		Relay:     s.Relay,
+		Entry:     s.Entry,
+		OperState: s.OperState,
+		Iface:     s.Iface,
+		RxBytes:   s.RxBytes,
+		TxBytes:   s.TxBytes,
+	}
+	if s.PeerEndpoint.IsValid() {
+		o.Endpoint = s.PeerEndpoint.String()
+	}
+	if !s.LastHandshake.IsZero() {
+		o.LastHandshake = s.LastHandshake.UTC().Format(time.RFC3339)
+	}
+	data, err := json.Marshal(o)
+	if err != nil {
+		return "", err
+	}
+	return string(data) + "\n", nil
+}
+
+type waybarOut struct {
+	Text       string `json:"text"`
+	Alt        string `json:"alt"`
+	Tooltip    string `json:"tooltip"`
+	Class      string `json:"class"`
+	Percentage int    `json:"percentage"`
+}
+
+func Waybar(s Snapshot) (string, error) {
+	if !s.Up {
+		data, err := json.Marshal(struct {
+			Text    string `json:"text"`
+			Alt     string `json:"alt"`
+			Tooltip string `json:"tooltip"`
+			Class   string `json:"class"`
+		}{"off", "disconnected", "mvad disconnected", "disconnected"})
+		if err != nil {
+			return "", err
+		}
+		return string(data) + "\n", nil
+	}
+	name := s.Relay
+	if name == "" {
+		name = s.PeerEndpoint.String()
+	}
+	tip := "connected to " + name
+	if s.Entry != "" {
+		tip += " via " + s.Entry
+	}
+	if s.TxBytes != 0 || s.RxBytes != 0 {
+		tip += fmt.Sprintf("\n%s ↑ / %s ↓", humanBytes(s.TxBytes), humanBytes(s.RxBytes))
+	}
+	o := waybarOut{Text: name, Alt: "connected", Tooltip: tip, Class: "connected"}
+	data, err := json.Marshal(o)
+	if err != nil {
+		return "", err
+	}
+	return string(data) + "\n", nil
+}
+
 func humanDuration(d time.Duration) string {
 	if d < 0 {
 		d = 0
@@ -60,4 +136,21 @@ func humanDuration(d time.Duration) string {
 		return fmt.Sprintf("%dm", int(d/time.Minute))
 	}
 	return fmt.Sprintf("%dh", int(d/time.Hour))
+}
+
+func humanBytes(n int64) string {
+	if n < 0 {
+		n = 0
+	}
+	if n < 1000 {
+		return fmt.Sprintf("%d B", n)
+	}
+	units := []string{"kB", "MB", "GB", "TB", "PB"}
+	f := float64(n) / 1000
+	i := 0
+	for f >= 1000 && i < len(units)-1 {
+		f /= 1000
+		i++
+	}
+	return fmt.Sprintf("%.1f %s", f, units[i])
 }
