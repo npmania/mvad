@@ -260,6 +260,20 @@ func main() {
 		cfg = &config.Config{}
 	}
 	st.cfg = cfg
+	st.dark = cfg.Dark
+	if !cfg.DarkSet {
+		if conn, err := dbus.SessionBus(); err == nil {
+			obj := conn.Object("org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop")
+			var v dbus.Variant
+			if err := obj.Call("org.freedesktop.portal.Settings.Read", 0, "org.freedesktop.appearance", "color-scheme").Store(&v); err == nil {
+				if inner, ok := v.Value().(dbus.Variant); ok {
+					if u, ok := inner.Value().(uint32); ok && u == 1 {
+						st.dark = true
+					}
+				}
+			}
+		}
+	}
 	st.allowLAN.Value = cfg.AllowLAN
 	st.lockdownOn.Value = cfg.LockdownOn
 	st.closeToTray.Value = !cfg.NoCloseToTray
@@ -595,6 +609,9 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 
 			if st.toggle.Clicked(gtx) {
 				st.dark = !st.dark
+				st.cfg.Dark = st.dark
+				st.cfg.DarkSet = true
+				_ = st.cfg.Save()
 			}
 			if st.tabConn.Clicked(gtx) {
 				st.view = viewConnect
