@@ -433,6 +433,7 @@ func (x *xembed) openPopup(rootX, rootY int16, shown bool) {
 		int16(px), int16(py), width, height, 0,
 		xproto.WindowClassInputOutput, screen.RootVisual,
 		mask, values).Check(); err != nil {
+		log.Printf("tray: popup create: %v", err)
 		return
 	}
 
@@ -452,7 +453,12 @@ func (x *xembed) openPopup(rootX, rootY int16, shown bool) {
 	x.popupW = int(width)
 	x.popupH = int(height)
 	x.popupHov = -1
-	xproto.MapWindow(x.conn, wid)
+	if err := xproto.MapWindowChecked(x.conn, wid).Check(); err != nil {
+		log.Printf("tray: popup map: %v", err)
+		x.closePopup()
+		return
+	}
+	log.Printf("tray: popup mapped")
 }
 
 func (x *xembed) closePopup() {
