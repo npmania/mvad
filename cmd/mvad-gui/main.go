@@ -98,6 +98,47 @@ var (
 	}
 )
 
+const themeFadeDur = 100 * time.Millisecond
+
+func currentPalette(st *state, gtx layout.Context) palette {
+	to := lightPalette
+	if st.dark {
+		to = darkPalette
+	}
+	if st.themeChangeAt.IsZero() {
+		return to
+	}
+	elapsed := gtx.Now.Sub(st.themeChangeAt)
+	if elapsed >= themeFadeDur {
+		st.themeChangeAt = time.Time{}
+		return to
+	}
+	from := darkPalette
+	if st.dark {
+		from = lightPalette
+	}
+	gtx.Execute(op.InvalidateCmd{})
+	return lerpPalette(from, to, float32(elapsed)/float32(themeFadeDur))
+}
+
+func lerpPalette(a, b palette, t float32) palette {
+	return palette{
+		bg:     lerpNRGBA(a.bg, b.bg, t),
+		fg:     lerpNRGBA(a.fg, b.fg, t),
+		muted:  lerpNRGBA(a.muted, b.muted, t),
+		dim:    lerpNRGBA(a.dim, b.dim, t),
+		accent: lerpNRGBA(a.accent, b.accent, t),
+		errFg:  lerpNRGBA(a.errFg, b.errFg, t),
+	}
+}
+
+func lerpNRGBA(a, b color.NRGBA, t float32) color.NRGBA {
+	mix := func(x, y uint8) uint8 {
+		return uint8(float32(x) + (float32(y)-float32(x))*t + 0.5)
+	}
+	return color.NRGBA{mix(a.R, b.R), mix(a.G, b.G), mix(a.B, b.B), mix(a.A, b.A)}
+}
+
 type viewKind int
 
 const (
@@ -132,6 +173,8 @@ type state struct {
 	loadedAny   bool
 	dark        bool
 	txActive    bool
+
+	themeChangeAt time.Time
 
 	cfg *config.Config
 
@@ -691,6 +734,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 				st.dark = !st.dark
 				st.cfg.Dark = st.dark
 				st.cfg.DarkSet = true
+				st.themeChangeAt = gtx.Now
 				_ = st.cfg.Save()
 				if st.tr != nil {
 					st.tr.setDark(st.dark)
@@ -1008,10 +1052,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 }
 
 func layoutUI(gtx layout.Context, th *material.Theme, st *state) {
-	pal := lightPalette
-	if st.dark {
-		pal = darkPalette
-	}
+	pal := currentPalette(st, gtx)
 	paint.FillShape(gtx.Ops, pal.bg, clip.Rect{Max: gtx.Constraints.Max}.Op())
 	th.Bg, th.Fg = pal.bg, pal.fg
 	th.ContrastBg, th.ContrastFg = pal.fg, pal.bg
