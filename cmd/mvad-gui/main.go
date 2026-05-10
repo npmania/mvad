@@ -129,6 +129,8 @@ type state struct {
 	openAcct                           widget.Clickable
 	logout                             widget.Clickable
 	logoutArmed                        time.Time
+	rotateKey                          widget.Clickable
+	rotateKeyArmed                     time.Time
 
 	loginToken widget.Editor
 	loginBtn   widget.Clickable
@@ -435,6 +437,13 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 					st.deviceArmed = map[string]time.Time{}
 					st.deviceClicks = map[string]*widget.Clickable{}
 					st.deviceRemoving = ""
+				}
+			case "rotate-key":
+				if r.err == nil {
+					if c, err := config.Load(); err == nil && c != nil {
+						st.cfg = c
+					}
+					st.devicesLoaded = false
 				}
 			case "login":
 				if r.err == nil {
@@ -745,7 +754,11 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 				st.runningName = "signup"
 				go runCmd(st.ctx, w, st.cmdDone, "signup")
 			}
-			if !st.running && st.logout.Clicked(gtx) {
+			if !st.running && st.snap.Up {
+				st.logoutArmed = time.Time{}
+				st.rotateKeyArmed = time.Time{}
+			}
+			if !st.running && !st.snap.Up && st.logout.Clicked(gtx) {
 				if !st.logoutArmed.IsZero() && time.Since(st.logoutArmed) < 5*time.Second {
 					st.logoutArmed = time.Time{}
 					st.cmdErr = nil
@@ -759,6 +772,22 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 			}
 			if !st.logoutArmed.IsZero() && time.Since(st.logoutArmed) >= 5*time.Second {
 				st.logoutArmed = time.Time{}
+			}
+			rotateDisabled := st.running || st.snap.Up || st.cfg.AccountToken == "" || st.cfg.DeviceID == ""
+			if !rotateDisabled && st.rotateKey.Clicked(gtx) {
+				if !st.rotateKeyArmed.IsZero() && time.Since(st.rotateKeyArmed) < 5*time.Second {
+					st.rotateKeyArmed = time.Time{}
+					st.cmdErr = nil
+					st.cmdOut = ""
+					st.running = true
+					st.runningName = "rotate-key"
+					go runCmd(st.ctx, w, st.cmdDone, "rotate-key")
+				} else {
+					st.rotateKeyArmed = time.Now()
+				}
+			}
+			if !st.rotateKeyArmed.IsZero() && time.Since(st.rotateKeyArmed) >= 5*time.Second {
+				st.rotateKeyArmed = time.Time{}
 			}
 			if !st.acctRefreshing && st.acctRefresh.Clicked(gtx) && st.cfg.AccountToken != "" {
 				st.acctRefreshing = true
@@ -1293,6 +1322,11 @@ func accountInfoRows(th *material.Theme, st *state, pal palette) []layout.FlexCh
 	if !st.logoutArmed.IsZero() && time.Since(st.logoutArmed) < 5*time.Second {
 		logoutLabel = "Confirm?"
 	}
+	rotateLabel := "Rotate key"
+	if !st.rotateKeyArmed.IsZero() && time.Since(st.rotateKeyArmed) < 5*time.Second {
+		rotateLabel = "Confirm?"
+	}
+	rotateDisabled := st.running || st.snap.Up || st.cfg.AccountToken == "" || st.cfg.DeviceID == ""
 	children = append(children,
 		layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -1312,7 +1346,11 @@ func accountInfoRows(th *material.Theme, st *state, pal palette) []layout.FlexCh
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(28)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return actionButton(gtx, th, &st.logout, pal, logoutLabel, st.running, st.runningName == "logout")
+			return actionButton(gtx, th, &st.rotateKey, pal, rotateLabel, rotateDisabled, st.runningName == "rotate-key")
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return actionButton(gtx, th, &st.logout, pal, logoutLabel, st.running || st.snap.Up, st.runningName == "logout")
 		}),
 	)
 	return children
