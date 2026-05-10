@@ -124,6 +124,13 @@ type state struct {
 	acctRefreshing bool
 	acctRefreshErr string
 
+	devices        []mullvad.Device
+	devicesLoaded  bool
+	devicesErr     string
+	deviceClicks   map[string]*widget.Clickable
+	deviceArmed    map[string]time.Time
+	deviceRemoving string
+
 	splitList    widget.List
 	splitRefresh widget.Clickable
 	addPID       widget.Editor
@@ -165,6 +172,8 @@ func run(w *app.Window) error {
 	st.expanded = map[string]bool{}
 	st.headerClicks = map[string]*widget.Clickable{}
 	st.rowClicks = map[string]*widget.Clickable{}
+	st.deviceClicks = map[string]*widget.Clickable{}
+	st.deviceArmed = map[string]time.Time{}
 	st.splitList.Axis = layout.Vertical
 	st.addPID.SingleLine = true
 	st.addPID.Submit = true
@@ -189,6 +198,7 @@ func run(w *app.Window) error {
 	splitDone := make(chan splitLoadResult, 1)
 	runDone := make(chan runResult, 1)
 	acctDone := make(chan acctLoadResult, 1)
+	deviceRemoveDone := make(chan deviceRemoveResult, 1)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -229,6 +239,12 @@ func run(w *app.Window) error {
 					if c, err := config.Load(); err == nil && c != nil {
 						st.cfg = c
 					}
+					st.devices = nil
+					st.devicesLoaded = false
+					st.devicesErr = ""
+					st.deviceArmed = map[string]time.Time{}
+					st.deviceClicks = map[string]*widget.Clickable{}
+					st.deviceRemoving = ""
 				}
 			case "login":
 				if r.err == nil {
@@ -236,6 +252,14 @@ func run(w *app.Window) error {
 						st.cfg = c
 					}
 					st.loginToken.SetText("")
+					st.devices = nil
+					st.devicesLoaded = false
+					st.devicesErr = ""
+					if !st.acctRefreshing && st.cfg.AccountToken != "" {
+						st.acctRefreshing = true
+						st.acctRefreshErr = ""
+						go loadAccount(ctx, w, acctDone)
+					}
 				}
 			case "signup":
 				if r.err == nil {
@@ -243,6 +267,14 @@ func run(w *app.Window) error {
 						st.cfg = c
 					}
 					st.signupOut = strings.TrimSpace(r.out)
+					st.devices = nil
+					st.devicesLoaded = false
+					st.devicesErr = ""
+					if !st.acctRefreshing && st.cfg.AccountToken != "" {
+						st.acctRefreshing = true
+						st.acctRefreshErr = ""
+						go loadAccount(ctx, w, acctDone)
+					}
 				}
 			case "split":
 				if !st.splitLoading {
@@ -286,10 +318,28 @@ func run(w *app.Window) error {
 			st.acctRefreshing = false
 			if r.err != nil {
 				st.acctRefreshErr = r.err.Error()
+				st.devicesErr = r.err.Error()
 			} else {
 				st.acctRefreshErr = ""
+				st.devicesErr = ""
+				st.devices = r.devices
+				st.devicesLoaded = true
 				if c, err := config.Load(); err == nil && c != nil {
 					st.cfg = c
+				}
+			}
+		case r := <-deviceRemoveDone:
+			st.deviceRemoving = ""
+			if r.err != nil {
+				st.devicesErr = r.err.Error()
+			} else {
+				st.devicesErr = ""
+				delete(st.deviceClicks, r.id)
+				delete(st.deviceArmed, r.id)
+				if !st.acctRefreshing && st.cfg.AccountToken != "" {
+					st.acctRefreshing = true
+					st.acctRefreshErr = ""
+					go loadAccount(ctx, w, acctDone)
 				}
 			}
 		default:
@@ -312,6 +362,11 @@ func run(w *app.Window) error {
 			}
 			if st.tabAcct.Clicked(gtx) {
 				st.view = viewAccount
+				if st.cfg.AccountToken != "" && !st.devicesLoaded && !st.acctRefreshing {
+					st.acctRefreshing = true
+					st.acctRefreshErr = ""
+					go loadAccount(ctx, w, acctDone)
+				}
 			}
 			if st.tabSplit.Clicked(gtx) {
 				st.view = viewSplit
@@ -480,6 +535,37 @@ func run(w *app.Window) error {
 				st.acctRefreshing = true
 				st.acctRefreshErr = ""
 				go loadAccount(ctx, w, acctDone)
+			}
+			if st.cfg.AccountToken != "" {
+				now := time.Now()
+				for _, d := range st.devices {
+					if d.ID == st.cfg.DeviceID {
+						continue
+					}
+					c, ok := st.deviceClicks[d.ID]
+					if !ok {
+						c = &widget.Clickable{}
+						st.deviceClicks[d.ID] = c
+					}
+					if !c.Clicked(gtx) {
+						continue
+					}
+					if t, armed := st.deviceArmed[d.ID]; armed && now.Sub(t) < 5*time.Second {
+						delete(st.deviceArmed, d.ID)
+						if st.deviceRemoving == "" {
+							st.deviceRemoving = d.ID
+							st.devicesErr = ""
+							go removeDevice(ctx, w, deviceRemoveDone, st.cfg.AccountToken, d.ID)
+						}
+					} else {
+						st.deviceArmed[d.ID] = now
+					}
+				}
+				for id, t := range st.deviceArmed {
+					if now.Sub(t) >= 5*time.Second {
+						delete(st.deviceArmed, id)
+					}
+				}
 			}
 
 			layoutUI(gtx, th, &st)
@@ -880,6 +966,7 @@ func accountInfoRows(th *material.Theme, st *state, pal palette) []layout.FlexCh
 			}),
 		)
 	}
+	children = append(children, devicesSection(th, st, pal)...)
 	logoutLabel := "Logout"
 	if !st.logoutArmed.IsZero() && time.Since(st.logoutArmed) < 5*time.Second {
 		logoutLabel = "Confirm?"
@@ -958,6 +1045,99 @@ func accountSignInRows(th *material.Theme, st *state, pal palette) []layout.Flex
 		}),
 	)
 	return children
+}
+
+func devicesSection(th *material.Theme, st *state, pal palette) []layout.FlexChild {
+	if st.devicesLoaded && len(st.devices) == 0 && st.devicesErr == "" {
+		return nil
+	}
+	children := []layout.FlexChild{
+		layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return hairline(gtx, pal.dim)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Label(th, unit.Sp(12), "Devices")
+			lbl.Color = pal.muted
+			return lbl.Layout(gtx)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
+	}
+	switch {
+	case st.devicesLoaded:
+		for i := range st.devices {
+			d := st.devices[i]
+			children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return deviceRow(gtx, th, st, pal, d)
+			}))
+		}
+	case st.devicesErr == "":
+		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Label(th, unit.Sp(13), "loading…")
+			lbl.Color = pal.muted
+			return lbl.Layout(gtx)
+		}))
+	}
+	if st.devicesErr != "" {
+		msg := st.devicesErr
+		children = append(children,
+			layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Label(th, unit.Sp(12), firstLine(msg))
+				lbl.Color = pal.errFg
+				return lbl.Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(2)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Label(th, unit.Sp(12), "press ↻ to retry")
+				lbl.Color = pal.muted
+				return lbl.Layout(gtx)
+			}),
+		)
+	}
+	return children
+}
+
+func deviceRow(gtx layout.Context, th *material.Theme, st *state, pal palette, d mullvad.Device) layout.Dimensions {
+	return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Label(th, unit.Sp(13), d.Name)
+				lbl.Color = pal.fg
+				return lbl.Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				if d.ID == st.cfg.DeviceID {
+					lbl := material.Label(th, unit.Sp(12), "this device")
+					lbl.Color = pal.muted
+					return lbl.Layout(gtx)
+				}
+				if d.ID == st.deviceRemoving {
+					lbl := material.Label(th, unit.Sp(12), "removing…")
+					lbl.Color = pal.muted
+					return lbl.Layout(gtx)
+				}
+				c, ok := st.deviceClicks[d.ID]
+				if !ok {
+					c = &widget.Clickable{}
+					st.deviceClicks[d.ID] = c
+				}
+				label := "remove"
+				col := pal.fg
+				if t, armed := st.deviceArmed[d.ID]; armed && time.Since(t) < 5*time.Second {
+					label = "Confirm?"
+					col = pal.errFg
+				}
+				return c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Label(th, unit.Sp(13), label)
+					lbl.Color = col
+					return lbl.Layout(gtx)
+				})
+			}),
+		)
+	})
 }
 
 func hairline(gtx layout.Context, c color.NRGBA) layout.Dimensions {
@@ -1477,6 +1657,12 @@ func loadRelaysNow(ctx context.Context, refresh bool) relayLoadResult {
 }
 
 type acctLoadResult struct {
+	devices []mullvad.Device
+	err     error
+}
+
+type deviceRemoveResult struct {
+	id  string
 	err error
 }
 
@@ -1505,8 +1691,9 @@ func loadAccountNow(ctx context.Context) acctLoadResult {
 		return acctLoadResult{err: err}
 	}
 	cfg.AccountExpiry = exp
+	var devs []mullvad.Device
 	if cfg.DeviceID != "" {
-		devs, err := c.ListDevices(cctx, cfg.AccountToken)
+		devs, err = c.ListDevices(cctx, cfg.AccountToken)
 		if err != nil {
 			return acctLoadResult{err: err}
 		}
@@ -1520,7 +1707,19 @@ func loadAccountNow(ctx context.Context) acctLoadResult {
 	if err := cfg.Save(); err != nil {
 		return acctLoadResult{err: err}
 	}
-	return acctLoadResult{}
+	sort.Slice(devs, func(i, j int) bool { return devs[i].Created.Before(devs[j].Created) })
+	return acctLoadResult{devices: devs}
+}
+
+func removeDevice(ctx context.Context, w *app.Window, done chan<- deviceRemoveResult, token, id string) {
+	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	err := mullvad.New().RevokeDevice(cctx, token, id)
+	select {
+	case done <- deviceRemoveResult{id: id, err: err}:
+	case <-ctx.Done():
+	}
+	w.Invalidate()
 }
 
 type splitLoadResult struct {
