@@ -51,7 +51,7 @@ type popupRow struct {
 	cmd    trayCmd
 }
 
-func startXEmbed(ctx context.Context, polls <-chan pollResult, windowState <-chan bool, cmds chan<- trayCmd) (*xembed, error) {
+func startXEmbed(ctx context.Context, polls <-chan pollResult, windowState <-chan bool, cmds chan<- trayCmd, favorites []string) (*xembed, error) {
 	conn, err := xgb.NewConn()
 	if err != nil {
 		return nil, err
@@ -151,6 +151,8 @@ func startXEmbed(ctx context.Context, polls <-chan pollResult, windowState <-cha
 		done:     make(chan struct{}),
 		popupHov: -1,
 	}
+	x.menu = buildTrayMenu(favorites, false, "")
+	log.Printf("tray: menu initialized (%d items)", len(x.menu))
 	x.openFont()
 	x.put(pmDown)
 

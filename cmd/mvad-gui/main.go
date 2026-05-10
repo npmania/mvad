@@ -272,7 +272,7 @@ func main() {
 	if err == nil && sniWatcherOwned(conn) {
 		tr, err = startSNI(ctx, conn, pollsTray, windowState, trayCmds, cfg.Favorites)
 	} else {
-		tr, err = startXEmbed(ctx, pollsTray, windowState, trayCmds)
+		tr, err = startXEmbed(ctx, pollsTray, windowState, trayCmds, cfg.Favorites)
 	}
 	if err != nil {
 		log.Printf("tray: %v (no SNI watcher and no system tray; running windowed-only)", err)
