@@ -45,6 +45,33 @@ func TestAcquireCrossProcess(t *testing.T) {
 	}
 }
 
+func TestReleaseOutOfOrder(t *testing.T) {
+	if os.Getenv("MVAD_LOCK_CHILD_OK") == "1" {
+		rel, err := AcquireRoot()
+		if err != nil {
+			os.Exit(2)
+		}
+		rel()
+		os.Exit(0)
+	}
+	Path = filepath.Join(t.TempDir(), "lock")
+	r1, err := AcquireRoot()
+	if err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
+	r2, err := AcquireRoot()
+	if err != nil {
+		t.Fatalf("nested acquire: %v", err)
+	}
+	r1()
+	r2()
+	cmd := exec.Command(os.Args[0], "-test.run=TestReleaseOutOfOrder")
+	cmd.Env = append(os.Environ(), "MVAD_LOCK_CHILD_OK=1", "MVAD_LOCK_PATH="+Path)
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("child should acquire after both releases; got %v", err)
+	}
+}
+
 func TestMain(m *testing.M) {
 	if p := os.Getenv("MVAD_LOCK_PATH"); p != "" {
 		Path = p
