@@ -315,9 +315,19 @@ func setWindowState(ch chan bool, s bool) {
 	}
 }
 
+func loggedIn(st *state) bool {
+	return st.cfg.AccountToken != "" && st.cfg.DeviceID != "" && st.cfg.PrivateKey != ""
+}
+
 func applyTrayCmd(st *state, c trayCmd) {
 	switch c.kind {
 	case cmdConnect:
+		if !loggedIn(st) {
+			st.view = viewAccount
+			st.cmdName = "connect"
+			st.cmdErr = errors.New("log in first")
+			return
+		}
 		st.view = viewConnect
 	case cmdSettings:
 		st.view = viewSettings
@@ -452,13 +462,21 @@ func main() {
 						return
 					case cmdHide:
 					case cmdConnectFavorite:
-						if !st.running && c.relay != "" {
-							startConnect(&st, nil, c.relay)
+						if loggedIn(&st) {
+							if !st.running && c.relay != "" {
+								startConnect(&st, nil, c.relay)
+							}
+							st.view = viewConnect
+						} else {
+							st.view = viewAccount
+							st.cmdName = "connect"
+							st.cmdErr = errors.New("log in first")
 						}
-						st.view = viewConnect
 						windowed = true
 					case cmdAddFavorite:
-						addFavorite(&st, tr, c.relay)
+						if loggedIn(&st) {
+							addFavorite(&st, tr, c.relay)
+						}
 					default:
 						applyTrayCmd(&st, c)
 						windowed = true
@@ -766,14 +784,22 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 			case cmdQuit:
 				return errQuit
 			case cmdConnectFavorite:
-				if !st.running && c.relay != "" {
-					startConnect(st, w, c.relay)
+				if loggedIn(st) {
+					if !st.running && c.relay != "" {
+						startConnect(st, w, c.relay)
+					}
+					st.view = viewConnect
+				} else {
+					st.view = viewAccount
+					st.cmdName = "connect"
+					st.cmdErr = errors.New("log in first")
 				}
-				st.view = viewConnect
 				w.Option(app.Windowed.Option())
 				setWindowState(windowState, true)
 			case cmdAddFavorite:
-				addFavorite(st, st.tr, c.relay)
+				if loggedIn(st) {
+					addFavorite(st, st.tr, c.relay)
+				}
 			default:
 				applyTrayCmd(st, c)
 				w.Option(app.Windowed.Option())
@@ -980,15 +1006,19 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 				st.splitAdvOpen = !st.splitAdvOpen
 			}
 			if st.allowLAN.Update(gtx) {
-				st.cfg.AllowLAN = st.allowLAN.Value
-				_ = st.cfg.Save()
+				if st.snap.Up {
+					st.allowLAN.Value = !st.allowLAN.Value
+				} else {
+					st.cfg.AllowLAN = st.allowLAN.Value
+					_ = st.cfg.Save()
+				}
 			}
 			if st.closeToTray.Update(gtx) {
 				st.cfg.NoCloseToTray = !st.closeToTray.Value
 				_ = st.cfg.Save()
 			}
 			if st.lockdownOn.Update(gtx) {
-				if st.running {
+				if st.running || st.snap.Up {
 					st.lockdownOn.Value = !st.lockdownOn.Value
 				} else {
 					st.cmdErr = nil
@@ -1002,22 +1032,22 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 					go runCmd(st.ctx, w, st.cmdDone, "lockdown", sub)
 				}
 			}
-			if st.trWG.Clicked(gtx) {
+			if !st.snap.Up && st.trWG.Clicked(gtx) {
 				st.transport = "wireguard"
 			}
-			if st.trTCP.Clicked(gtx) {
+			if !st.snap.Up && st.trTCP.Clicked(gtx) {
 				st.transport = "tcp"
 			}
-			if st.trSS.Clicked(gtx) {
+			if !st.snap.Up && st.trSS.Clicked(gtx) {
 				st.transport = "shadowsocks"
 			}
-			if st.trP80.Clicked(gtx) {
+			if !st.snap.Up && st.trP80.Clicked(gtx) {
 				st.tcpPort = 80
 			}
-			if st.trP443.Clicked(gtx) {
+			if !st.snap.Up && st.trP443.Clicked(gtx) {
 				st.tcpPort = 443
 			}
-			if st.trP5001.Clicked(gtx) {
+			if !st.snap.Up && st.trP5001.Clicked(gtx) {
 				st.tcpPort = 5001
 			}
 			if st.openAcct.Clicked(gtx) {
@@ -1030,7 +1060,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 					st.running = true
 					st.runningName = "disconnect"
 					go runCmd(st.ctx, w, st.cmdDone, "disconnect")
-				} else if st.selected != "" {
+				} else if st.selected != "" && loggedIn(st) {
 					varg, err := viaArg(st)
 					if err != nil {
 						st.cmdName = "connect"
@@ -1059,7 +1089,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 					}
 				}
 			}
-			if !st.running && st.reconnect.Clicked(gtx) && st.cfg.LastRelay != "" {
+			if !st.running && st.reconnect.Clicked(gtx) && st.cfg.LastRelay != "" && loggedIn(st) {
 				st.cmdErr = nil
 				st.cmdOut = ""
 				st.running = true
@@ -1352,7 +1382,7 @@ func disconnectedBody(gtx layout.Context, th *material.Theme, st *state, pal pal
 		}
 	}
 	rows := buildRows(st.relays, st.expanded, filterText)
-	btnDisabled := st.selected == "" || st.running
+	btnDisabled := st.selected == "" || st.running || !loggedIn(st)
 	if st.transport == "shadowsocks" && strings.TrimSpace(st.bridge.Text()) == "" {
 		btnDisabled = true
 	}
@@ -1380,6 +1410,15 @@ func disconnectedBody(gtx layout.Context, th *material.Theme, st *state, pal pal
 			return actionButton(gtx, th, &st.btn, pal, "Connect", btnDisabled, st.runningName == "connect")
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if !loggedIn(st) {
+				return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						lbl := material.Label(th, unit.Sp(12), "log in first")
+						lbl.Color = pal.muted
+						return lbl.Layout(gtx)
+					})
+				})
+			}
 			return reconnectLink(gtx, th, st, pal)
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -1389,24 +1428,34 @@ func disconnectedBody(gtx layout.Context, th *material.Theme, st *state, pal pal
 }
 
 func settingsBody(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
+	lockSettings := st.snap.Up
 	children := []layout.FlexChild{
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if lockSettings {
+				gtx = gtx.Disabled()
+			}
 			return settingsRow(gtx, th, pal, "Allow LAN", "", &st.allowLAN)
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if lockSettings {
+				gtx = gtx.Disabled()
+			}
 			return transportSection(gtx, th, st, pal)
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if lockSettings {
+				gtx = gtx.Disabled()
+			}
 			return settingsRow(gtx, th, pal, "Lockdown", "persistent kill-switch", &st.lockdownOn)
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			if !st.snap.Up {
+			if !lockSettings {
 				return layout.Dimensions{}
 			}
 			return layout.Inset{Top: unit.Dp(20)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				lbl := material.Label(th, unit.Sp(12), "applies on next connect")
+				lbl := material.Label(th, unit.Sp(12), "disconnect to change")
 				lbl.Color = pal.muted
 				return lbl.Layout(gtx)
 			})
@@ -2163,6 +2212,9 @@ func relayRow(gtx layout.Context, th *material.Theme, st *state, pal palette, r 
 }
 
 func reconnectLink(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
+	if !loggedIn(st) {
+		return layout.Dimensions{}
+	}
 	target := st.cfg.LastQuery
 	if target == "" {
 		target = st.cfg.LastRelay
