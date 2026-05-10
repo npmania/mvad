@@ -2486,6 +2486,12 @@ func runCmd(ctx context.Context, w *app.Window, done chan<- cmdResult, args ...s
 	// pkexec must invoke the path the polkit policy is keyed on.
 	full := append([]string{"mvad"}, args...)
 	out, err := exec.CommandContext(ctx, "pkexec", full...).CombinedOutput()
+	if err != nil {
+		lo := strings.ToLower(string(out))
+		if strings.Contains(lo, "polkit-agent-helper") || strings.Contains(lo, "not authorized") {
+			err = errors.New("no polkit authentication agent running; install polkit-gnome (or polkit-kde-authentication-agent-1 / lxqt-policykit-agent / mate-polkit) and re-launch")
+		}
+	}
 	select {
 	case done <- cmdResult{name: args[0], out: string(out), err: err}:
 	case <-ctx.Done():
