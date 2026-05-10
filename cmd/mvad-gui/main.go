@@ -289,6 +289,7 @@ func relayInput(gtx layout.Context, th *material.Theme, ed *widget.Editor, pal p
 			es := material.Editor(th, ed, "")
 			es.Color = pal.fg
 			es.HintColor = pal.muted
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
 			return es.Layout(gtx)
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
