@@ -35,6 +35,7 @@ type xembed struct {
 
 	mu   sync.Mutex
 	menu []menuItem
+	wake func()
 
 	popup     xproto.Window
 	popupGC   xproto.Gcontext
@@ -266,7 +267,6 @@ func (x *xembed) loop(ctx context.Context, polls <-chan pollResult, windowState 
 func (x *xembed) handleEvent(ev xgb.Event, shown bool, last []byte) {
 	switch e := ev.(type) {
 	case xproto.ButtonPressEvent:
-		log.Printf("tray: btnpress event=%d wid=%d popup=%d detail=%d ex=%d ey=%d", e.Event, x.wid, x.popup, e.Detail, e.EventX, e.EventY)
 		switch {
 		case e.Event == x.wid && e.Detail == 1:
 			if shown {
@@ -306,6 +306,7 @@ func (x *xembed) put(argb []byte) {
 func (x *xembed) send(c trayCmd) {
 	select {
 	case x.cmds <- c:
+		x.doWake()
 	default:
 	}
 }
@@ -318,6 +319,21 @@ func (x *xembed) setMenu(items []menuItem) {
 	x.mu.Lock()
 	x.menu = items
 	x.mu.Unlock()
+}
+
+func (x *xembed) setWake(fn func()) {
+	x.mu.Lock()
+	x.wake = fn
+	x.mu.Unlock()
+}
+
+func (x *xembed) doWake() {
+	x.mu.Lock()
+	fn := x.wake
+	x.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 func (x *xembed) buildPopupRows(shown bool) []popupRow {
@@ -587,11 +603,9 @@ func (x *xembed) hoverPopup(y int) {
 
 func (x *xembed) clickPopup(eventX, eventY int) {
 	if x.popup == 0 {
-		log.Printf("tray: clickPopup but popup=0")
 		return
 	}
 	if eventX < 0 || eventX >= x.popupW || eventY < 0 || eventY >= x.popupH {
-		log.Printf("tray: clickPopup outside bounds %d,%d (popup %dx%d)", eventX, eventY, x.popupW, x.popupH)
 		x.closePopup()
 		return
 	}
@@ -600,7 +614,6 @@ func (x *xembed) clickPopup(eventX, eventY int) {
 			continue
 		}
 		if eventY >= x.popupYs[i] && eventY < x.popupYs[i]+x.popupRowH {
-			log.Printf("tray: clickPopup row=%d label=%q cmd=%+v noop=%v", i, r.label, r.cmd, r.noop)
 			if r.noop {
 				return
 			}
@@ -610,7 +623,6 @@ func (x *xembed) clickPopup(eventX, eventY int) {
 			return
 		}
 	}
-	log.Printf("tray: clickPopup no row match at y=%d (rowH=%d, ys=%v)", eventY, x.popupRowH, x.popupYs)
 	x.closePopup()
 }
 

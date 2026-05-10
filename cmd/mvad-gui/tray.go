@@ -56,6 +56,7 @@ type sni struct {
 	shown    bool
 	revision uint32
 	menu     []menuItem
+	wake     func()
 }
 
 func sniWatcherOwned(conn *dbus.Conn) bool {
@@ -189,6 +190,21 @@ func (t *sni) setMenu(items []menuItem) {
 	_ = t.conn.Emit(menuPath, menuIface+".LayoutUpdated", rev, int32(0))
 }
 
+func (t *sni) setWake(fn func()) {
+	t.mu.Lock()
+	t.wake = fn
+	t.mu.Unlock()
+}
+
+func (t *sni) doWake() {
+	t.mu.Lock()
+	fn := t.wake
+	t.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
 func (t *sni) shutdown() {
 	if t.conn == nil {
 		return
@@ -226,6 +242,7 @@ func (s sniHandler) Scroll(delta int32, orientation string) *dbus.Error {
 func (s sniHandler) send(c trayCmd) {
 	select {
 	case s.t.cmds <- c:
+		s.t.doWake()
 	default:
 	}
 }
@@ -432,6 +449,7 @@ func (m menuHandler) Event(id int32, eventID string, data dbus.Variant, timestam
 	}
 	select {
 	case m.t.cmds <- cmd:
+		m.t.doWake()
 	default:
 	}
 	return nil

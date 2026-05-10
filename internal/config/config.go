@@ -32,6 +32,7 @@ type Config struct {
 	DeviceName        string          `json:"device_name,omitempty"`
 	AllowLAN          bool            `json:"allow_lan,omitempty"`
 	LockdownOn        bool            `json:"lockdown_on,omitempty"`
+	NoCloseToTray     bool            `json:"no_close_to_tray,omitempty"`
 	Favorites         []string        `json:"favorites,omitempty"`
 }
 

@@ -117,9 +117,10 @@ type state struct {
 
 	view viewKind
 
-	allowLAN   widget.Bool
-	lockdownOn widget.Bool
-	transport  string
+	allowLAN    widget.Bool
+	lockdownOn  widget.Bool
+	closeToTray widget.Bool
+	transport   string
 
 	tabConn, tabSet, tabAcct, tabSplit widget.Clickable
 	trWG, trTCP                        widget.Clickable
@@ -161,6 +162,7 @@ type state struct {
 	tr            tray
 	trayLastUp    bool
 	trayLastRelay string
+	hideRequested bool
 }
 
 type row struct {
@@ -190,9 +192,13 @@ type trayCmd struct {
 type tray interface {
 	shutdown()
 	setMenu(items []menuItem)
+	setWake(fn func())
 }
 
-var errQuit = errors.New("quit")
+var (
+	errQuit   = errors.New("quit")
+	errReopen = errors.New("reopen")
+)
 
 func setWindowState(ch chan bool, s bool) {
 	for {
@@ -244,6 +250,7 @@ func main() {
 	st.cfg = cfg
 	st.allowLAN.Value = cfg.AllowLAN
 	st.lockdownOn.Value = cfg.LockdownOn
+	st.closeToTray.Value = !cfg.NoCloseToTray
 	st.transport = cfg.LastTransport
 	if st.transport != "tcp" {
 		st.transport = "wireguard"
@@ -251,7 +258,7 @@ func main() {
 
 	pollsWin := make(chan pollResult, 1)
 	pollsTray := make(chan pollResult, 1)
-	trayCmds := make(chan trayCmd)
+	trayCmds := make(chan trayCmd, 8)
 	windowState := make(chan bool, 1)
 
 	st.cmdDone = make(chan cmdResult, 1)
@@ -289,60 +296,61 @@ func main() {
 			os.Exit(0)
 		}()
 
-		windowed := !hidden || tr == nil
 		for {
-			if windowed {
-				w := new(app.Window)
-				w.Option(app.Title("mvad"), app.Size(unit.Dp(420), unit.Dp(540)))
-				if tr != nil {
-					setWindowState(windowState, true)
-				}
-				err := run(w, &st, pollsWin, trayCmds)
-				if errors.Is(err, errQuit) {
+			windowed := !hidden || tr == nil
+			for !windowed {
+				select {
+				case c := <-trayCmds:
+					switch c.kind {
+					case cmdQuit:
+						return
+					case cmdHide:
+					case cmdConnectFavorite:
+						if !st.running && c.relay != "" {
+							startConnect(&st, nil, c.relay)
+						}
+						st.view = viewConnect
+						windowed = true
+					case cmdAddFavorite:
+						addFavorite(&st, tr, c.relay)
+					default:
+						applyTrayCmd(&st, c)
+						windowed = true
+					}
+				case r := <-pollsWin:
+					if r.err == nil {
+						st.snap = r.snap
+					}
+					updateTrayMenu(&st, r)
+				case <-ctx.Done():
 					return
 				}
-				if err != nil {
-					log.Fatal(err)
-				}
-				windowed = false
-				if tr == nil {
-					return
-				}
-				setWindowState(windowState, false)
+			}
+
+			w := new(app.Window)
+			w.Option(app.Title("mvad"), app.Size(unit.Dp(420), unit.Dp(540)))
+			if tr != nil {
+				setWindowState(windowState, true)
+				tr.setWake(w.Invalidate)
+			}
+			err := run(w, &st, pollsWin, trayCmds, windowState)
+			if tr != nil {
+				tr.setWake(nil)
+			}
+			if errors.Is(err, errReopen) {
+				hidden = true
 				continue
 			}
-			select {
-			case c := <-trayCmds:
-				switch c.kind {
-				case cmdQuit:
-					return
-				case cmdHide:
-				case cmdConnectFavorite:
-					if !st.running && c.relay != "" {
-						startConnect(&st, nil, c.relay)
-					}
-					st.view = viewConnect
-					windowed = true
-				case cmdAddFavorite:
-					addFavorite(&st, tr, c.relay)
-				default:
-					applyTrayCmd(&st, c)
-					windowed = true
-				}
-			case r := <-pollsWin:
-				if r.err == nil {
-					st.snap = r.snap
-				}
-				updateTrayMenu(&st, r)
-			case <-ctx.Done():
-				return
+			if err != nil && !errors.Is(err, errQuit) {
+				log.Fatal(err)
 			}
+			return
 		}
 	}()
 	app.Main()
 }
 
-func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan trayCmd) error {
+func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan trayCmd, windowState chan bool) error {
 	th := material.NewTheme()
 	th.Shaper = text.NewShaper(text.WithCollection(gofont.Collection()))
 
@@ -505,6 +513,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 		case c := <-trayCmds:
 			switch c.kind {
 			case cmdHide:
+				st.hideRequested = true
 				w.Perform(system.ActionClose)
 			case cmdQuit:
 				return errQuit
@@ -513,17 +522,26 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 					startConnect(st, w, c.relay)
 				}
 				st.view = viewConnect
+				w.Option(app.Windowed.Option())
+				setWindowState(windowState, true)
 			case cmdAddFavorite:
 				addFavorite(st, st.tr, c.relay)
 			default:
 				applyTrayCmd(st, c)
+				w.Option(app.Windowed.Option())
+				setWindowState(windowState, true)
 			}
 		default:
 		}
 
 		switch e := w.Event().(type) {
 		case app.DestroyEvent:
-			return nil
+			if st.tr != nil && (st.hideRequested || !st.cfg.NoCloseToTray) {
+				st.hideRequested = false
+				setWindowState(windowState, false)
+				return errReopen
+			}
+			return errQuit
 		case app.FrameEvent:
 			gtx := app.NewContext(&ops, e)
 
@@ -612,6 +630,10 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 			}
 			if st.allowLAN.Update(gtx) {
 				st.cfg.AllowLAN = st.allowLAN.Value
+				_ = st.cfg.Save()
+			}
+			if st.closeToTray.Update(gtx) {
+				st.cfg.NoCloseToTray = !st.closeToTray.Value
 				_ = st.cfg.Save()
 			}
 			if st.lockdownOn.Update(gtx) {
@@ -964,6 +986,14 @@ func settingsBody(gtx layout.Context, th *material.Theme, st *state, pal palette
 				return lbl.Layout(gtx)
 			})
 		}),
+	}
+	if st.tr != nil {
+		children = append(children,
+			layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return settingsRow(gtx, th, pal, "Close to tray", "X button hides instead of quits", &st.closeToTray)
+			}),
+		)
 	}
 	children = append(children, favoritesSection(th, st, pal)...)
 	children = append(children,
