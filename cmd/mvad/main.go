@@ -177,11 +177,12 @@ func login(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	c := mullvad.New()
-	if _, err := c.AccountExpiry(ctx, token); err != nil {
+	expiry, err := c.AccountExpiry(ctx, token)
+	if err != nil {
 		return err
 	}
 	if *keyFlag != "" {
-		return loginImport(ctx, c, token, *keyFlag)
+		return loginImport(ctx, c, token, *keyFlag, expiry)
 	}
 	priv, err := wgtypes.GeneratePrivateKey()
 	if err != nil {
@@ -200,6 +201,8 @@ func login(args []string) error {
 	cfg.PrivateKey = priv.String()
 	cfg.DeviceIPv4 = dev.IPv4
 	cfg.DeviceIPv6 = dev.IPv6
+	cfg.DeviceName = dev.Name
+	cfg.AccountExpiry = expiry
 	if err := cfg.Save(); err != nil {
 		revokeErr := c.RevokeDevice(ctx, token, dev.ID)
 		return errors.Join(err, revokeErr)
@@ -207,7 +210,7 @@ func login(args []string) error {
 	return nil
 }
 
-func loginImport(ctx context.Context, c *mullvad.Client, token, keyStr string) error {
+func loginImport(ctx context.Context, c *mullvad.Client, token, keyStr string, expiry time.Time) error {
 	priv, err := wgtypes.ParseKey(keyStr)
 	if err != nil {
 		return err
@@ -230,6 +233,8 @@ func loginImport(ctx context.Context, c *mullvad.Client, token, keyStr string) e
 		cfg.PrivateKey = priv.String()
 		cfg.DeviceIPv4 = d.IPv4
 		cfg.DeviceIPv6 = d.IPv6
+		cfg.DeviceName = d.Name
+		cfg.AccountExpiry = expiry
 		return cfg.Save()
 	}
 	return errors.New("no device matching that key on this account")
@@ -266,6 +271,8 @@ func logout(args []string) error {
 	cfg.PrivateKey = ""
 	cfg.DeviceIPv4 = netip.Prefix{}
 	cfg.DeviceIPv6 = netip.Prefix{}
+	cfg.DeviceName = ""
+	cfg.AccountExpiry = time.Time{}
 	return cfg.Save()
 }
 
@@ -363,6 +370,7 @@ func rotateKey(args []string) error {
 	cfg.PrivateKey = priv.String()
 	cfg.DeviceIPv4 = dev.IPv4
 	cfg.DeviceIPv6 = dev.IPv6
+	cfg.DeviceName = dev.Name
 	if err := cfg.Save(); err != nil {
 		revokeErr := c.RevokeDevice(ctx, cfg.AccountToken, dev.ID)
 		return errors.Join(err, revokeErr)
@@ -804,8 +812,9 @@ func showStatus(args []string) error {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	format := fs.String("format", "", "output format: json or waybar")
+	refresh := fs.Bool("refresh", false, "refresh account expiry and device name from the API")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
-		return usagef("usage: mvad status [--format json|waybar]")
+		return usagef("usage: mvad status [--format json|waybar] [--refresh]")
 	}
 	switch *format {
 	case "", "json", "waybar":
@@ -816,12 +825,19 @@ func showStatus(args []string) error {
 	if err != nil {
 		return &exitErr{code: 2, err: err}
 	}
+	if *refresh {
+		if err := refreshAccount(cfg); err != nil {
+			return &exitErr{code: 2, err: err}
+		}
+	}
 	s, err := status.Read(ifname)
 	if err != nil && !errors.Is(err, status.ErrNotConnected) {
 		return &exitErr{code: 2, err: err}
 	}
 	s.Relay = cfg.LastRelay
 	s.Entry = cfg.LastEntryRelay
+	s.AccountExpiry = cfg.AccountExpiry
+	s.DeviceName = cfg.DeviceName
 	var out string
 	switch *format {
 	case "json":
@@ -839,6 +855,33 @@ func showStatus(args []string) error {
 		return &exitErr{code: 1}
 	}
 	return nil
+}
+
+func refreshAccount(cfg *config.Config) error {
+	if cfg.AccountToken == "" {
+		return errors.New("not logged in")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	c := mullvad.New()
+	exp, err := c.AccountExpiry(ctx, cfg.AccountToken)
+	if err != nil {
+		return err
+	}
+	cfg.AccountExpiry = exp
+	if cfg.DeviceID != "" {
+		devs, err := c.ListDevices(ctx, cfg.AccountToken)
+		if err != nil {
+			return err
+		}
+		for _, d := range devs {
+			if d.ID == cfg.DeviceID {
+				cfg.DeviceName = d.Name
+				break
+			}
+		}
+	}
+	return cfg.Save()
 }
 
 func udp2tcpShim(args []string) error {

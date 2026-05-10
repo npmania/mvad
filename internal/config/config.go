@@ -28,6 +28,8 @@ type Config struct {
 	LastBridge        string          `json:"last_bridge,omitempty"`
 	RelayCache        json.RawMessage `json:"relay_cache,omitempty"`
 	RelaysFetchedAt   time.Time       `json:"relays_fetched_at,omitzero"`
+	AccountExpiry     time.Time       `json:"account_expiry,omitzero"`
+	DeviceName        string          `json:"device_name,omitempty"`
 }
 
 func path() (string, error) {

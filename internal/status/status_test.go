@@ -61,8 +61,24 @@ func TestPlainEmptyRelayFallback(t *testing.T) {
 	}
 }
 
+func TestPlainAccountAndDevice(t *testing.T) {
+	s := Snapshot{
+		Up:            true,
+		Relay:         "se-mma-wg-001",
+		LastHandshake: time.Now().Add(-3 * time.Second),
+		AccountExpiry: time.Now().Add(12*24*time.Hour + time.Hour),
+		DeviceName:    "happy-bear",
+	}
+	got := Plain(s)
+	want := "connected to se-mma-wg-001, last handshake 3s ago\naccount expires in 12 days\ndevice: happy-bear\n"
+	if got != want {
+		t.Errorf("Plain = %q, want %q", got, want)
+	}
+}
+
 func TestJSONConnected(t *testing.T) {
 	hs := time.Date(2026, 5, 10, 1, 23, 45, 0, time.UTC)
+	exp := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	s := Snapshot{
 		Iface:         "mvad-wg0",
 		Up:            true,
@@ -73,14 +89,32 @@ func TestJSONConnected(t *testing.T) {
 		RxBytes:       12345,
 		TxBytes:       6789,
 		LastHandshake: hs,
+		AccountExpiry: exp,
+		DeviceName:    "happy-bear",
 	}
 	got, err := JSON(s)
 	if err != nil {
 		t.Fatalf("JSON: %v", err)
 	}
-	want := `{"connected":true,"relay":"se-mma-wg-001","entry":"se-arn-wg-001","endpoint":"1.2.3.4:51820","operstate":"up","iface":"mvad-wg0","rx_bytes":12345,"tx_bytes":6789,"last_handshake":"2026-05-10T01:23:45Z"}` + "\n"
+	want := `{"connected":true,"relay":"se-mma-wg-001","entry":"se-arn-wg-001","endpoint":"1.2.3.4:51820","operstate":"up","iface":"mvad-wg0","rx_bytes":12345,"tx_bytes":6789,"last_handshake":"2026-05-10T01:23:45Z","account_expiry":"2026-08-01T00:00:00Z","device_name":"happy-bear"}` + "\n"
 	if got != want {
 		t.Errorf("JSON =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestHumanExpiry(t *testing.T) {
+	now := time.Now()
+	if got := humanExpiry(now.Add(-time.Second)); got != "expired" {
+		t.Errorf("expired: %q", got)
+	}
+	if got := humanExpiry(now.Add(12*24*time.Hour + time.Hour)); got != "in 12 days" {
+		t.Errorf("12 days: %q", got)
+	}
+	if got := humanExpiry(now.Add(5*time.Hour + time.Minute)); got != "in 5 hours" {
+		t.Errorf("5 hours: %q", got)
+	}
+	if got := humanExpiry(now.Add(30 * time.Second)); got != "in under a minute" {
+		t.Errorf("under a minute: %q", got)
 	}
 }
 

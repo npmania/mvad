@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"strings"
 	"time"
 
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
@@ -23,6 +24,8 @@ type Snapshot struct {
 	RxBytes       int64
 	TxBytes       int64
 	LastHandshake time.Time
+	AccountExpiry time.Time
+	DeviceName    string
 }
 
 var (
@@ -33,21 +36,31 @@ var (
 func Read(iface string) (Snapshot, error) { return read(iface) }
 
 func Plain(s Snapshot) string {
+	var b strings.Builder
 	if !s.Up {
-		return "disconnected\n"
+		b.WriteString("disconnected\n")
+	} else {
+		name := s.Relay
+		if name == "" {
+			name = s.PeerEndpoint.String()
+		}
+		via := ""
+		if s.Entry != "" {
+			via = " via " + s.Entry
+		}
+		if s.LastHandshake.IsZero() {
+			fmt.Fprintf(&b, "connected to %s%s, no handshake yet\n", name, via)
+		} else {
+			fmt.Fprintf(&b, "connected to %s%s, last handshake %s ago\n", name, via, humanDuration(time.Since(s.LastHandshake)))
+		}
 	}
-	name := s.Relay
-	if name == "" {
-		name = s.PeerEndpoint.String()
+	if !s.AccountExpiry.IsZero() {
+		fmt.Fprintf(&b, "account expires %s\n", humanExpiry(s.AccountExpiry))
 	}
-	via := ""
-	if s.Entry != "" {
-		via = " via " + s.Entry
+	if s.DeviceName != "" {
+		fmt.Fprintf(&b, "device: %s\n", s.DeviceName)
 	}
-	if s.LastHandshake.IsZero() {
-		return fmt.Sprintf("connected to %s%s, no handshake yet\n", name, via)
-	}
-	return fmt.Sprintf("connected to %s%s, last handshake %s ago\n", name, via, humanDuration(time.Since(s.LastHandshake)))
+	return b.String()
 }
 
 type jsonOut struct {
@@ -60,6 +73,8 @@ type jsonOut struct {
 	RxBytes       int64  `json:"rx_bytes,omitempty"`
 	TxBytes       int64  `json:"tx_bytes,omitempty"`
 	LastHandshake string `json:"last_handshake,omitempty"`
+	AccountExpiry string `json:"account_expiry,omitempty"`
+	DeviceName    string `json:"device_name,omitempty"`
 }
 
 func JSON(s Snapshot) (string, error) {
@@ -78,6 +93,10 @@ func JSON(s Snapshot) (string, error) {
 	if !s.LastHandshake.IsZero() {
 		o.LastHandshake = s.LastHandshake.UTC().Format(time.RFC3339)
 	}
+	if !s.AccountExpiry.IsZero() {
+		o.AccountExpiry = s.AccountExpiry.UTC().Format(time.RFC3339)
+	}
+	o.DeviceName = s.DeviceName
 	data, err := json.Marshal(o)
 	if err != nil {
 		return "", err
@@ -136,6 +155,23 @@ func humanDuration(d time.Duration) string {
 		return fmt.Sprintf("%dm", int(d/time.Minute))
 	}
 	return fmt.Sprintf("%dh", int(d/time.Hour))
+}
+
+func humanExpiry(t time.Time) string {
+	d := time.Until(t)
+	if d <= 0 {
+		return "expired"
+	}
+	if d >= 48*time.Hour {
+		return fmt.Sprintf("in %d days", int(d/(24*time.Hour)))
+	}
+	if d >= 2*time.Hour {
+		return fmt.Sprintf("in %d hours", int(d/time.Hour))
+	}
+	if d >= 2*time.Minute {
+		return fmt.Sprintf("in %d minutes", int(d/time.Minute))
+	}
+	return "in under a minute"
 }
 
 func humanBytes(n int64) string {
