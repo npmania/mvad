@@ -27,6 +27,7 @@ import (
 	"github.com/npmania/mvad/internal/dns"
 	"github.com/npmania/mvad/internal/firewall"
 	"github.com/npmania/mvad/internal/mullvad"
+	"github.com/npmania/mvad/internal/notify"
 	"github.com/npmania/mvad/internal/route"
 	"github.com/npmania/mvad/internal/status"
 	"github.com/npmania/mvad/internal/udp2tcp"
@@ -468,10 +469,22 @@ func pickBridge(bs []mullvad.Bridge, name string) (mullvad.Bridge, error) {
 	return mullvad.Bridge{}, fmt.Errorf("bridge %q not found", name)
 }
 
-func connect(args []string) error {
+func connect(args []string) (retErr error) {
 	if os.Geteuid() != 0 {
 		return errors.New("this command needs root; rerun with sudo")
 	}
+	var relay string
+	defer func() {
+		var uerr *usageError
+		if errors.As(retErr, &uerr) {
+			return
+		}
+		if retErr == nil {
+			notify.Send("mvad", "connected to "+relay)
+		} else {
+			notify.Send("mvad: connect failed", retErr.Error())
+		}
+	}()
 	fs := flag.NewFlagSet("connect", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	allowLAN := fs.Bool("allow-lan", false, "allow traffic to private LAN ranges")
@@ -527,6 +540,7 @@ func connect(args []string) error {
 	if err != nil {
 		return err
 	}
+	relay = exit.Hostname
 	endpoint := netip.AddrPortFrom(exit.IPv4, wireguardPort)
 	entryHost := ""
 	if *via != "" {
