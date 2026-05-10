@@ -63,7 +63,36 @@ The commands are:
 	lockdown    install or remove the persistent kill-switch
 	status      print connection status
 	version     print version
+
+Run 'mvad <command> --help' for command-specific options.
 `
+
+const (
+	usageLogin           = "usage: mvad login [--key <base64-privkey>] <token>"
+	usageLogout          = "usage: mvad logout"
+	usageDevices         = "usage: mvad devices <list|remove>"
+	usageDevicesList     = "usage: mvad devices list"
+	usageDevicesRemove   = "usage: mvad devices remove <id>"
+	usageRotateKey       = "usage: mvad rotate-key"
+	usageRelays          = "usage: mvad relays [--bridges] [--refresh] [--country C]... [--city C]... [--provider P]... [--owned true|false] [--protocol wireguard]"
+	usageConnect         = "usage: mvad connect [--allow-lan] [--via <entry>] [--transport wireguard|tcp|shadowsocks [--port 80|443|5001] [--bridge <host>]] <relay>"
+	usageReconnect       = "usage: mvad reconnect [--allow-lan]"
+	usageDisconnect      = "usage: mvad disconnect"
+	usageStatus          = "usage: mvad status [--format json|waybar] [--refresh]"
+	usageLockdown        = "usage: mvad lockdown <on|off|refresh>"
+	usageLockdownOn      = "usage: mvad lockdown on"
+	usageLockdownOff     = "usage: mvad lockdown off"
+	usageLockdownRefresh = "usage: mvad lockdown refresh"
+)
+
+func wantHelp(args []string) bool {
+	for _, a := range args {
+		if a == "--help" || a == "-h" {
+			return true
+		}
+	}
+	return false
+}
 
 type usageError struct{ msg string }
 
@@ -88,6 +117,13 @@ func (e *exitErr) Error() string {
 func (e *exitErr) Unwrap() error { return e.err }
 
 func main() {
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "help", "--help", "-h":
+			fmt.Print(usageText)
+			return
+		}
+	}
 	flag.Usage = func() { fmt.Fprint(os.Stderr, usageText) }
 	flag.Parse()
 	if flag.NArg() == 0 {
@@ -162,8 +198,15 @@ func login(args []string) error {
 	fs := flag.NewFlagSet("login", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	keyFlag := fs.String("key", "", "base64 wireguard private key of an existing device to import")
-	if err := fs.Parse(args); err != nil || fs.NArg() != 1 {
-		return usagef("usage: mvad login [--key <base64-privkey>] <token>")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Println(usageLogin)
+			return nil
+		}
+		return usagef(usageLogin)
+	}
+	if fs.NArg() != 1 {
+		return usagef(usageLogin)
 	}
 	token := fs.Arg(0)
 	if len(token) != 16 {
@@ -241,8 +284,12 @@ func loginImport(ctx context.Context, c *mullvad.Client, token, keyStr string, e
 }
 
 func logout(args []string) error {
+	if wantHelp(args) {
+		fmt.Println(usageLogout)
+		return nil
+	}
 	if len(args) != 0 {
-		return usagef("usage: mvad logout")
+		return usagef(usageLogout)
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -277,8 +324,25 @@ func logout(args []string) error {
 }
 
 func devices(args []string) error {
-	if len(args) < 1 {
-		return usagef("usage: mvad devices <list|remove>")
+	if len(args) == 0 {
+		return usagef(usageDevices)
+	}
+	sub, rest := args[0], args[1:]
+	if sub == "--help" || sub == "-h" {
+		fmt.Println(usageDevices)
+		return nil
+	}
+	switch sub {
+	case "list":
+		if wantHelp(rest) {
+			fmt.Println(usageDevicesList)
+			return nil
+		}
+	case "remove":
+		if wantHelp(rest) {
+			fmt.Println(usageDevicesRemove)
+			return nil
+		}
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -287,19 +351,19 @@ func devices(args []string) error {
 	if cfg.AccountToken == "" {
 		return errors.New("not logged in")
 	}
-	switch args[0] {
+	switch sub {
 	case "list":
-		return devicesList(cfg, args[1:])
+		return devicesList(cfg, rest)
 	case "remove":
-		return devicesRemove(cfg, args[1:])
+		return devicesRemove(cfg, rest)
 	default:
-		return usagef("unknown devices subcommand %q", args[0])
+		return usagef("unknown devices subcommand %q", sub)
 	}
 }
 
 func devicesList(cfg *config.Config, args []string) error {
 	if len(args) != 0 {
-		return usagef("usage: mvad devices list")
+		return usagef(usageDevicesList)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -318,7 +382,7 @@ func devicesList(cfg *config.Config, args []string) error {
 
 func devicesRemove(cfg *config.Config, args []string) error {
 	if len(args) != 1 {
-		return usagef("usage: mvad devices remove <id>")
+		return usagef(usageDevicesRemove)
 	}
 	if args[0] == cfg.DeviceID {
 		return errors.New("this is your current device; use mvad logout")
@@ -337,8 +401,12 @@ func devicesRemove(cfg *config.Config, args []string) error {
 }
 
 func rotateKey(args []string) error {
+	if wantHelp(args) {
+		fmt.Println(usageRotateKey)
+		return nil
+	}
 	if len(args) != 0 {
-		return usagef("usage: mvad rotate-key")
+		return usagef(usageRotateKey)
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -413,8 +481,15 @@ func listRelays(args []string) error {
 	protocol := fs.String("protocol", "", "filter by protocol: wireguard")
 	bridges := fs.Bool("bridges", false, "list shadowsocks bridges instead of wireguard relays")
 	refresh := fs.Bool("refresh", false, "force refetch from API, bypassing the 24h cache")
-	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
-		return usagef("usage: mvad relays [--bridges] [--refresh] [--country C]... [--city C]... [--provider P]... [--owned true|false] [--protocol wireguard]")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Println(usageRelays)
+			return nil
+		}
+		return usagef(usageRelays)
+	}
+	if fs.NArg() != 0 {
+		return usagef(usageRelays)
 	}
 	var wantOwned, filterOwned bool
 	switch *owned {
@@ -504,6 +579,10 @@ func pickBridge(bs []mullvad.Bridge, name string) (mullvad.Bridge, error) {
 }
 
 func connect(args []string) (retErr error) {
+	if wantHelp(args) {
+		fmt.Println(usageConnect)
+		return nil
+	}
 	if os.Geteuid() != 0 {
 		return errors.New("this command needs root; rerun with sudo")
 	}
@@ -526,8 +605,15 @@ func connect(args []string) (retErr error) {
 	transport := fs.String("transport", "wireguard", "transport: wireguard, tcp, or shadowsocks")
 	tcpPort := fs.Uint("port", 5001, "udp2tcp gateway TCP port (80, 443, or 5001)")
 	bridge := fs.String("bridge", "", "shadowsocks bridge hostname")
-	if err := fs.Parse(args); err != nil || fs.NArg() != 1 {
-		return usagef("usage: mvad connect [--allow-lan] [--via <entry>] [--transport wireguard|tcp|shadowsocks [--port 80|443|5001] [--bridge <host>]] <relay>")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Println(usageConnect)
+			return nil
+		}
+		return usagef(usageConnect)
+	}
+	if fs.NArg() != 1 {
+		return usagef(usageConnect)
 	}
 	useTCP, useSS := false, false
 	switch *transport {
@@ -689,14 +775,25 @@ func connect(args []string) (retErr error) {
 }
 
 func reconnect(args []string) error {
+	if wantHelp(args) {
+		fmt.Println(usageReconnect)
+		return nil
+	}
 	if os.Geteuid() != 0 {
 		return errors.New("this command needs root; rerun with sudo")
 	}
 	fs := flag.NewFlagSet("reconnect", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	allowLAN := fs.Bool("allow-lan", false, "allow traffic to private LAN ranges")
-	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
-		return usagef("usage: mvad reconnect [--allow-lan]")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Println(usageReconnect)
+			return nil
+		}
+		return usagef(usageReconnect)
+	}
+	if fs.NArg() != 0 {
+		return usagef(usageReconnect)
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -726,11 +823,15 @@ func reconnect(args []string) error {
 }
 
 func disconnect(args []string) error {
+	if wantHelp(args) {
+		fmt.Println(usageDisconnect)
+		return nil
+	}
 	if os.Geteuid() != 0 {
 		return errors.New("this command needs root; rerun with sudo")
 	}
 	if len(args) != 0 {
-		return usagef("usage: mvad disconnect")
+		return usagef(usageDisconnect)
 	}
 	var endpoint netip.Addr
 	if cfg, err := config.Load(); err == nil {
@@ -740,10 +841,14 @@ func disconnect(args []string) error {
 }
 
 func lockdownCmd(args []string) error {
-	if len(args) < 1 {
-		return usagef("usage: mvad lockdown <on|off|refresh>")
+	if len(args) == 0 {
+		return usagef(usageLockdown)
 	}
 	sub, rest := args[0], args[1:]
+	if sub == "--help" || sub == "-h" {
+		fmt.Println(usageLockdown)
+		return nil
+	}
 	switch sub {
 	case "on":
 		return lockdownOn(rest)
@@ -757,11 +862,15 @@ func lockdownCmd(args []string) error {
 }
 
 func lockdownOn(args []string) error {
+	if wantHelp(args) {
+		fmt.Println(usageLockdownOn)
+		return nil
+	}
 	if os.Geteuid() != 0 {
 		return errors.New("this command needs root; rerun with sudo")
 	}
 	if len(args) != 0 {
-		return usagef("usage: mvad lockdown on")
+		return usagef(usageLockdownOn)
 	}
 	ips, err := loadRelayIPs()
 	if err != nil {
@@ -771,21 +880,29 @@ func lockdownOn(args []string) error {
 }
 
 func lockdownOff(args []string) error {
+	if wantHelp(args) {
+		fmt.Println(usageLockdownOff)
+		return nil
+	}
 	if os.Geteuid() != 0 {
 		return errors.New("this command needs root; rerun with sudo")
 	}
 	if len(args) != 0 {
-		return usagef("usage: mvad lockdown off")
+		return usagef(usageLockdownOff)
 	}
 	return lockdown.Off()
 }
 
 func lockdownRefresh(args []string) error {
+	if wantHelp(args) {
+		fmt.Println(usageLockdownRefresh)
+		return nil
+	}
 	if os.Geteuid() != 0 {
 		return errors.New("this command needs root; rerun with sudo")
 	}
 	if len(args) != 0 {
-		return usagef("usage: mvad lockdown refresh")
+		return usagef(usageLockdownRefresh)
 	}
 	ips, err := loadRelayIPs()
 	if err != nil {
@@ -814,8 +931,15 @@ func showStatus(args []string) error {
 	fs.SetOutput(io.Discard)
 	format := fs.String("format", "", "output format: json or waybar")
 	refresh := fs.Bool("refresh", false, "refresh account expiry and device name from the API")
-	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
-		return usagef("usage: mvad status [--format json|waybar] [--refresh]")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Println(usageStatus)
+			return nil
+		}
+		return usagef(usageStatus)
+	}
+	if fs.NArg() != 0 {
+		return usagef(usageStatus)
 	}
 	switch *format {
 	case "", "json", "waybar":
