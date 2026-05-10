@@ -51,14 +51,14 @@ func Plain(s Snapshot) string {
 		if s.LastHandshake.IsZero() {
 			fmt.Fprintf(&b, "connected to %s%s, no handshake yet\n", name, via)
 		} else {
-			fmt.Fprintf(&b, "connected to %s%s, last handshake %s ago\n", name, via, humanDuration(time.Since(s.LastHandshake)))
+			fmt.Fprintf(&b, "connected to %s%s, last handshake %s ago\n", name, via, HumanDuration(time.Since(s.LastHandshake)))
 		}
 	}
 	if !s.AccountExpiry.IsZero() {
 		if time.Until(s.AccountExpiry) <= 0 {
 			b.WriteString("account expired\n")
 		} else {
-			fmt.Fprintf(&b, "account expires %s\n", humanExpiry(s.AccountExpiry))
+			fmt.Fprintf(&b, "account expires %s\n", HumanExpiry(s.AccountExpiry))
 		}
 	}
 	if s.DeviceName != "" {
@@ -67,7 +67,7 @@ func Plain(s Snapshot) string {
 	return b.String()
 }
 
-type jsonOut struct {
+type JSONOut struct {
 	Connected     bool   `json:"connected"`
 	Relay         string `json:"relay,omitempty"`
 	Entry         string `json:"entry,omitempty"`
@@ -82,7 +82,7 @@ type jsonOut struct {
 }
 
 func JSON(s Snapshot) (string, error) {
-	o := jsonOut{
+	o := JSONOut{
 		Connected: s.Up,
 		Relay:     s.Relay,
 		Entry:     s.Entry,
@@ -127,7 +127,7 @@ func Waybar(s Snapshot) (string, error) {
 			tip += " via " + s.Entry
 		}
 		if s.TxBytes != 0 || s.RxBytes != 0 {
-			tip += fmt.Sprintf("\n%s ↑ / %s ↓", humanBytes(s.TxBytes), humanBytes(s.RxBytes))
+			tip += fmt.Sprintf("\n%s ↑ / %s ↓", HumanBytes(s.TxBytes), HumanBytes(s.RxBytes))
 		}
 		o = waybarOut{Text: name, Alt: "connected", Tooltip: tip, Class: "connected"}
 	}
@@ -138,7 +138,7 @@ func Waybar(s Snapshot) (string, error) {
 	return string(data) + "\n", nil
 }
 
-func humanDuration(d time.Duration) string {
+func HumanDuration(d time.Duration) string {
 	if d < 0 {
 		d = 0
 	}
@@ -151,7 +151,7 @@ func humanDuration(d time.Duration) string {
 	return fmt.Sprintf("%dh", int(d/time.Hour))
 }
 
-func humanExpiry(t time.Time) string {
+func HumanExpiry(t time.Time) string {
 	d := time.Until(t)
 	if d >= 48*time.Hour {
 		return fmt.Sprintf("in %d days", int(d/(24*time.Hour)))
@@ -165,7 +165,7 @@ func humanExpiry(t time.Time) string {
 	return "in under a minute"
 }
 
-func humanBytes(n int64) string {
+func HumanBytes(n int64) string {
 	if n < 0 {
 		n = 0
 	}

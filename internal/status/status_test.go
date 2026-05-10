@@ -104,13 +104,13 @@ func TestJSONConnected(t *testing.T) {
 
 func TestHumanExpiry(t *testing.T) {
 	now := time.Now()
-	if got := humanExpiry(now.Add(12*24*time.Hour + time.Hour)); got != "in 12 days" {
+	if got := HumanExpiry(now.Add(12*24*time.Hour + time.Hour)); got != "in 12 days" {
 		t.Errorf("12 days: %q", got)
 	}
-	if got := humanExpiry(now.Add(5*time.Hour + time.Minute)); got != "in 5 hours" {
+	if got := HumanExpiry(now.Add(5*time.Hour + time.Minute)); got != "in 5 hours" {
 		t.Errorf("5 hours: %q", got)
 	}
-	if got := humanExpiry(now.Add(30 * time.Second)); got != "in under a minute" {
+	if got := HumanExpiry(now.Add(30 * time.Second)); got != "in under a minute" {
 		t.Errorf("under a minute: %q", got)
 	}
 }
@@ -175,8 +175,8 @@ func TestHumanBytes(t *testing.T) {
 		{4_500_000_000, "4.5 GB"},
 	}
 	for _, c := range cases {
-		if got := humanBytes(c.in); got != c.want {
-			t.Errorf("humanBytes(%d) = %q, want %q", c.in, got, c.want)
+		if got := HumanBytes(c.in); got != c.want {
+			t.Errorf("HumanBytes(%d) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
@@ -198,8 +198,8 @@ func TestHumanDuration(t *testing.T) {
 		{-time.Second, "0s"},
 	}
 	for _, c := range cases {
-		if got := humanDuration(c.in); got != c.want {
-			t.Errorf("humanDuration(%v) = %q, want %q", c.in, got, c.want)
+		if got := HumanDuration(c.in); got != c.want {
+			t.Errorf("HumanDuration(%v) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
