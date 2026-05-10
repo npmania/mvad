@@ -1,0 +1,13 @@
+#!/sbin/openrc-run
+
+description="mvad lockdown firewall"
+
+depend() {
+	before net
+}
+
+start() {
+	ebegin "Loading mvad lockdown"
+	nft -f /var/lib/mvad/lockdown.nft
+	eend $?
+}

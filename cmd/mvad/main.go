@@ -26,6 +26,7 @@ import (
 	"github.com/npmania/mvad/internal/config"
 	"github.com/npmania/mvad/internal/dns"
 	"github.com/npmania/mvad/internal/firewall"
+	"github.com/npmania/mvad/internal/lockdown"
 	"github.com/npmania/mvad/internal/mullvad"
 	"github.com/npmania/mvad/internal/notify"
 	"github.com/npmania/mvad/internal/route"
@@ -59,6 +60,7 @@ The commands are:
 	connect     connect to a relay
 	disconnect  disconnect
 	reconnect   reconnect to the last relay
+	lockdown    install or remove the persistent kill-switch
 	status      print connection status
 	version     print version
 `
@@ -104,6 +106,8 @@ func main() {
 		err = disconnect(args)
 	case "reconnect":
 		err = reconnect(args)
+	case "lockdown":
+		err = lockdownCmd(args)
 	case "status":
 		err = showStatus(args)
 	case "version":
@@ -703,6 +707,76 @@ func disconnect(args []string) error {
 		endpoint = cfg.LastEndpoint.Addr()
 	}
 	return errors.Join(ssStop(), udp2tcpStop(), firewall.Down(), dns.Restore(ifname), route.Unset(ifname, endpoint), wg.Down(ifname))
+}
+
+func lockdownCmd(args []string) error {
+	if len(args) < 1 {
+		return usagef("usage: mvad lockdown <on|off|refresh>")
+	}
+	sub, rest := args[0], args[1:]
+	switch sub {
+	case "on":
+		return lockdownOn(rest)
+	case "off":
+		return lockdownOff(rest)
+	case "refresh":
+		return lockdownRefresh(rest)
+	default:
+		return usagef("unknown lockdown subcommand %q", sub)
+	}
+}
+
+func lockdownOn(args []string) error {
+	if os.Geteuid() != 0 {
+		return errors.New("this command needs root; rerun with sudo")
+	}
+	if len(args) != 0 {
+		return usagef("usage: mvad lockdown on")
+	}
+	ips, err := loadRelayIPs()
+	if err != nil {
+		return err
+	}
+	return lockdown.On(ips)
+}
+
+func lockdownOff(args []string) error {
+	if os.Geteuid() != 0 {
+		return errors.New("this command needs root; rerun with sudo")
+	}
+	if len(args) != 0 {
+		return usagef("usage: mvad lockdown off")
+	}
+	return lockdown.Off()
+}
+
+func lockdownRefresh(args []string) error {
+	if os.Geteuid() != 0 {
+		return errors.New("this command needs root; rerun with sudo")
+	}
+	if len(args) != 0 {
+		return usagef("usage: mvad lockdown refresh")
+	}
+	ips, err := loadRelayIPs()
+	if err != nil {
+		return err
+	}
+	return lockdown.Refresh(ips)
+}
+
+func loadRelayIPs() ([]netip.Addr, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	ips, err := mullvad.RelayIPs(cfg.RelayCache)
+	if err != nil {
+		return nil, err
+	}
+	if len(ips) == 0 {
+		return nil, errors.New("no cached relays; run mvad relays")
+	}
+	return ips, nil
 }
 
 func showStatus(args []string) error {

@@ -1,0 +1,12 @@
+[Unit]
+Description=mvad lockdown firewall
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nft -f /var/lib/mvad/lockdown.nft
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
