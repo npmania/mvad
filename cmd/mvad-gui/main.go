@@ -121,9 +121,11 @@ type state struct {
 	lockdownOn  widget.Bool
 	closeToTray widget.Bool
 	transport   string
+	tcpPort     uint16
 
 	tabConn, tabSet, tabAcct, tabSplit widget.Clickable
 	trWG, trTCP                        widget.Clickable
+	trP80, trP443, trP5001             widget.Clickable
 	openAcct                           widget.Clickable
 	logout                             widget.Clickable
 	logoutArmed                        time.Time
@@ -254,6 +256,12 @@ func main() {
 	st.transport = cfg.LastTransport
 	if st.transport != "tcp" {
 		st.transport = "wireguard"
+	}
+	st.tcpPort = cfg.LastTransportPort
+	switch st.tcpPort {
+	case 80, 443, 5001:
+	default:
+		st.tcpPort = 5001
 	}
 
 	pollsWin := make(chan pollResult, 1)
@@ -395,6 +403,20 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 			st.cmdOut = r.out
 			st.cmdErr = r.err
 			switch r.name {
+			case "connect":
+				if r.err == nil {
+					if c, err := config.Load(); err == nil && c != nil {
+						st.cfg = c
+						st.transport = c.LastTransport
+						if st.transport != "tcp" {
+							st.transport = "wireguard"
+						}
+						switch c.LastTransportPort {
+						case 80, 443, 5001:
+							st.tcpPort = c.LastTransportPort
+						}
+					}
+				}
 			case "lockdown":
 				if r.err == nil {
 					st.cfg.LockdownOn = st.lockdownOn.Value
@@ -657,6 +679,15 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 			if st.trTCP.Clicked(gtx) {
 				st.transport = "tcp"
 			}
+			if st.trP80.Clicked(gtx) {
+				st.tcpPort = 80
+			}
+			if st.trP443.Clicked(gtx) {
+				st.tcpPort = 443
+			}
+			if st.trP5001.Clicked(gtx) {
+				st.tcpPort = 5001
+			}
 			if st.openAcct.Clicked(gtx) {
 				go runExternal(st.ctx, w, st.cmdDone, "xdg-open", "https://mullvad.net/account")
 			}
@@ -677,7 +708,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 						args = append(args, "--allow-lan")
 					}
 					if st.transport == "tcp" {
-						args = append(args, "--transport=tcp")
+						args = append(args, "--transport=tcp", fmt.Sprintf("--port=%d", st.tcpPort))
 					}
 					args = append(args, "--", st.selected)
 					go runCmd(st.ctx, w, st.cmdDone, args...)
@@ -1090,7 +1121,7 @@ func settingsRow(gtx layout.Context, th *material.Theme, pal palette, title, sub
 }
 
 func transportSection(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
-	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+	children := []layout.FlexChild{
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			lbl := material.Label(th, unit.Sp(14), "Transport")
 			lbl.Color = pal.fg
@@ -1108,7 +1139,34 @@ func transportSection(gtx layout.Context, th *material.Theme, st *state, pal pal
 				}),
 			)
 		}),
-	)
+	}
+	if st.transport == "tcp" {
+		children = append(children,
+			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Label(th, unit.Sp(13), "Port")
+				lbl.Color = pal.muted
+				return lbl.Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return transportLabel(gtx, th, &st.trP80, pal, "80", st.tcpPort == 80)
+					}),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(16)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return transportLabel(gtx, th, &st.trP443, pal, "443", st.tcpPort == 443)
+					}),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(16)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return transportLabel(gtx, th, &st.trP5001, pal, "5001", st.tcpPort == 5001)
+					}),
+				)
+			}),
+		)
+	}
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
 }
 
 func transportLabel(gtx layout.Context, th *material.Theme, c *widget.Clickable, pal palette, label string, active bool) layout.Dimensions {
@@ -1885,7 +1943,7 @@ func startConnect(st *state, w *app.Window, relay string) {
 		args = append(args, "--allow-lan")
 	}
 	if st.transport == "tcp" {
-		args = append(args, "--transport=tcp")
+		args = append(args, "--transport=tcp", fmt.Sprintf("--port=%d", st.tcpPort))
 	}
 	args = append(args, "--", relay)
 	go runCmd(st.ctx, w, st.cmdDone, args...)
