@@ -11,7 +11,6 @@ import (
 	"math"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,8 +30,11 @@ import (
 
 	"github.com/npmania/mvad/internal/config"
 	"github.com/npmania/mvad/internal/mullvad"
+	"github.com/npmania/mvad/internal/split"
 	"github.com/npmania/mvad/internal/status"
 )
+
+const ifname = "mvad-wg0"
 
 type palette struct {
 	bg, fg, muted, dim, accent, errFg color.NRGBA
@@ -72,7 +74,7 @@ type splitPID struct {
 }
 
 type state struct {
-	snap        status.JSONOut
+	snap        status.Snapshot
 	pollErr     error
 	cmdOut      string
 	cmdErr      error
@@ -169,8 +171,7 @@ func run(w *app.Window) error {
 		st.transport = "wireguard"
 	}
 
-	snaps := make(chan status.JSONOut, 1)
-	pollErrs := make(chan error, 1)
+	polls := make(chan pollResult, 1)
 	cmdDone := make(chan cmdResult, 1)
 	relayDone := make(chan relayLoadResult, 1)
 	splitDone := make(chan splitLoadResult, 1)
@@ -178,7 +179,7 @@ func run(w *app.Window) error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go pollStatus(ctx, w, snaps, pollErrs)
+	go pollStatus(ctx, w, polls)
 
 	st.relayLoading = true
 	go loadRelays(ctx, w, false, relayDone)
@@ -186,12 +187,13 @@ func run(w *app.Window) error {
 	var ops op.Ops
 	for {
 		select {
-		case s := <-snaps:
-			st.snap = s
-			st.pollErr = nil
-			st.loadedAny = true
-		case err := <-pollErrs:
-			st.pollErr = err
+		case r := <-polls:
+			if r.err != nil {
+				st.pollErr = r.err
+			} else {
+				st.snap = r.snap
+				st.pollErr = nil
+			}
 			st.loadedAny = true
 		case r := <-cmdDone:
 			if r.name != "xdg-open" {
@@ -369,7 +371,7 @@ func run(w *app.Window) error {
 				go runExternal(ctx, w, cmdDone, "xdg-open", "https://mullvad.net/account")
 			}
 			if !st.running && st.btn.Clicked(gtx) {
-				if st.snap.Connected {
+				if st.snap.Up {
 					st.cmdErr = nil
 					st.cmdOut = ""
 					st.running = true
@@ -422,7 +424,7 @@ func layoutUI(gtx layout.Context, th *material.Theme, st *state) {
 	th.Bg, th.Fg = pal.bg, pal.fg
 	th.ContrastBg, th.ContrastFg = pal.fg, pal.bg
 
-	if st.snap.Connected {
+	if st.snap.Up {
 		if st.selected != "" || len(st.expanded) > 0 || st.filter.Text() != "" {
 			st.selected = ""
 			st.expanded = map[string]bool{}
@@ -466,7 +468,7 @@ func panelBody(gtx layout.Context, th *material.Theme, st *state, pal palette) l
 	case viewSplit:
 		return splitBody(gtx, th, st, pal)
 	}
-	if st.snap.Connected {
+	if st.snap.Up {
 		return connectedBody(gtx, th, st, pal)
 	}
 	return disconnectedBody(gtx, th, st, pal)
@@ -612,7 +614,7 @@ func settingsBody(gtx layout.Context, th *material.Theme, st *state, pal palette
 			return settingsRow(gtx, th, pal, "Lockdown", "persistent kill-switch", &st.lockdownOn)
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			if !st.snap.Connected {
+			if !st.snap.Up {
 				return layout.Dimensions{}
 			}
 			return layout.Inset{Top: unit.Dp(20)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -818,7 +820,7 @@ func headline(st *state, pal palette) (string, color.NRGBA) {
 	if !st.loadedAny {
 		return "Loading…", pal.muted
 	}
-	if st.snap.Connected {
+	if st.snap.Up {
 		return "Connected", pal.accent
 	}
 	return "Disconnected", pal.fg
@@ -826,13 +828,13 @@ func headline(st *state, pal palette) (string, color.NRGBA) {
 
 func subLines(st *state) []string {
 	s := st.snap
-	if !s.Connected {
+	if !s.Up {
 		return nil
 	}
 	var out []string
 	name := s.Relay
-	if name == "" {
-		name = s.Endpoint
+	if name == "" && s.PeerEndpoint.IsValid() {
+		name = s.PeerEndpoint.String()
 	}
 	if name != "" {
 		if s.Entry != "" {
@@ -844,14 +846,14 @@ func subLines(st *state) []string {
 	if s.TxBytes != 0 || s.RxBytes != 0 {
 		out = append(out, fmt.Sprintf("%s ↑ / %s ↓", status.HumanBytes(s.TxBytes), status.HumanBytes(s.RxBytes)))
 	}
-	if hs, ok := parseTime(s.LastHandshake); ok {
-		out = append(out, "last handshake "+status.HumanDuration(time.Since(hs))+" ago")
+	if !s.LastHandshake.IsZero() {
+		out = append(out, "last handshake "+status.HumanDuration(time.Since(s.LastHandshake))+" ago")
 	}
-	if exp, ok := parseTime(s.AccountExpiry); ok {
-		if time.Until(exp) <= 0 {
+	if !s.AccountExpiry.IsZero() {
+		if time.Until(s.AccountExpiry) <= 0 {
 			out = append(out, "account expired")
 		} else {
-			out = append(out, "expires "+status.HumanExpiry(exp))
+			out = append(out, "expires "+status.HumanExpiry(s.AccountExpiry))
 		}
 	}
 	if s.DeviceName != "" {
@@ -1192,21 +1194,19 @@ func firstLine(s string) string {
 	return s
 }
 
-func pollStatus(ctx context.Context, w *app.Window, snaps chan<- status.JSONOut, errs chan<- error) {
+type pollResult struct {
+	snap status.Snapshot
+	err  error
+}
+
+func pollStatus(ctx context.Context, w *app.Window, out chan<- pollResult) {
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	for {
-		s, err := readStatus(ctx)
-		if err != nil {
-			select {
-			case errs <- err:
-			default:
-			}
-		} else {
-			select {
-			case snaps <- s:
-			default:
-			}
+		snap, err := readStatus()
+		select {
+		case out <- pollResult{snap: snap, err: err}:
+		default:
 		}
 		w.Invalidate()
 		select {
@@ -1217,32 +1217,16 @@ func pollStatus(ctx context.Context, w *app.Window, snaps chan<- status.JSONOut,
 	}
 }
 
-func mvadPath() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return "mvad"
+func readStatus() (status.Snapshot, error) {
+	s, err := status.Read(ifname)
+	if err != nil && !errors.Is(err, status.ErrNotConnected) {
+		return status.Snapshot{}, err
 	}
-	p := filepath.Join(filepath.Dir(exe), "mvad")
-	if _, err := os.Stat(p); err != nil {
-		return "mvad"
-	}
-	return p
-}
-
-func readStatus(ctx context.Context) (status.JSONOut, error) {
-	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(cctx, mvadPath(), "status", "--format=json").Output()
-	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
-			return status.JSONOut{}, fmt.Errorf("%s", strings.TrimSpace(string(ee.Stderr)))
-		}
-		return status.JSONOut{}, err
-	}
-	var s status.JSONOut
-	if err := json.Unmarshal(out, &s); err != nil {
-		return status.JSONOut{}, err
+	if cfg, cerr := config.Load(); cerr == nil {
+		s.Relay = cfg.LastRelay
+		s.Entry = cfg.LastEntryRelay
+		s.AccountExpiry = cfg.AccountExpiry
+		s.DeviceName = cfg.DeviceName
 	}
 	return s, nil
 }
@@ -1279,24 +1263,7 @@ type relayLoadResult struct {
 }
 
 func loadRelays(ctx context.Context, w *app.Window, refresh bool, done chan<- relayLoadResult) {
-	args := []string{"relays", "--json"}
-	if refresh {
-		args = append(args, "--refresh")
-	}
-	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(cctx, mvadPath(), args...).Output()
-	var res relayLoadResult
-	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
-			res.err = fmt.Errorf("%s", strings.TrimSpace(string(ee.Stderr)))
-		} else {
-			res.err = err
-		}
-	} else if uerr := json.Unmarshal(out, &res.relays); uerr != nil {
-		res.err = uerr
-	}
+	res := loadRelaysNow(ctx, refresh)
 	select {
 	case done <- res:
 	case <-ctx.Done():
@@ -1304,15 +1271,34 @@ func loadRelays(ctx context.Context, w *app.Window, refresh bool, done chan<- re
 	w.Invalidate()
 }
 
-func parseTime(s string) (time.Time, bool) {
-	if s == "" {
-		return time.Time{}, false
-	}
-	t, err := time.Parse(time.RFC3339, s)
+func loadRelaysNow(ctx context.Context, refresh bool) relayLoadResult {
+	var res relayLoadResult
+	cfg, err := config.Load()
 	if err != nil {
-		return time.Time{}, false
+		res.err = err
+		return res
 	}
-	return t, true
+	if !refresh && len(cfg.RelayCache) != 0 && time.Since(cfg.RelaysFetchedAt) < 24*time.Hour {
+		var relays []mullvad.Relay
+		if err := json.Unmarshal(cfg.RelayCache, &relays); err == nil {
+			res.relays = relays
+			return res
+		}
+	}
+	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	relays, err := mullvad.New().Relays(cctx)
+	if err != nil {
+		res.err = err
+		return res
+	}
+	res.relays = relays
+	if data, err := json.Marshal(relays); err == nil {
+		cfg.RelayCache = data
+		cfg.RelaysFetchedAt = time.Now()
+		_ = cfg.Save()
+	}
+	return res
 }
 
 type splitLoadResult struct {
@@ -1327,27 +1313,12 @@ type runResult struct {
 }
 
 func loadSplit(ctx context.Context, w *app.Window, done chan<- splitLoadResult) {
-	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(cctx, mvadPath(), "split", "list").Output()
 	var res splitLoadResult
+	pids, err := split.ListPIDs()
 	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
-			res.err = fmt.Errorf("%s", strings.TrimSpace(string(ee.Stderr)))
-		} else {
-			res.err = err
-		}
+		res.err = err
 	} else {
-		for line := range strings.SplitSeq(string(out), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			pid, err := strconv.Atoi(line)
-			if err != nil {
-				continue
-			}
+		for _, pid := range pids {
 			res.pids = append(res.pids, splitPID{pid: pid, comm: readComm(pid)})
 		}
 	}
