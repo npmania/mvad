@@ -13,6 +13,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -40,6 +41,33 @@ import (
 )
 
 const ifname = "mvad-wg0"
+
+var buildID = func() string {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	var rev string
+	var dirty bool
+	for _, s := range bi.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.modified":
+			dirty = s.Value == "true"
+		}
+	}
+	if rev == "" {
+		return ""
+	}
+	if len(rev) > 7 {
+		rev = rev[:7]
+	}
+	if dirty {
+		rev += "+"
+	}
+	return rev
+}()
 
 type palette struct {
 	bg, fg, muted, dim, accent, errFg color.NRGBA
@@ -1137,6 +1165,15 @@ func settingsBody(gtx layout.Context, th *material.Theme, st *state, pal palette
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			return layout.Dimensions{Size: gtx.Constraints.Min}
 		}),
+	)
+	if buildID != "" {
+		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Label(th, unit.Sp(11), "build "+buildID)
+			lbl.Color = pal.muted
+			return lbl.Layout(gtx)
+		}))
+	}
+	children = append(children,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return footer(gtx, th, st, pal)
 		}),
