@@ -64,6 +64,8 @@ The commands are:
 	reconnect   reconnect to the last relay
 	up          stay connected; reconnect on default-route changes
 	lockdown    install or remove the persistent kill-switch
+	run         run a command outside the tunnel via cgroup v2
+	split       manage the split-tunnel cgroup
 	status      print connection status
 	version     print version
 
@@ -87,6 +89,11 @@ const (
 	usageLockdownOn      = "usage: mvad lockdown on"
 	usageLockdownOff     = "usage: mvad lockdown off"
 	usageLockdownRefresh = "usage: mvad lockdown refresh"
+	usageRun             = "usage: mvad run [--] <command> [args...]"
+	usageSplit           = "usage: mvad split <add-pid|list|clear>"
+	usageSplitAddPID     = "usage: mvad split add-pid <pid>"
+	usageSplitList       = "usage: mvad split list"
+	usageSplitClear      = "usage: mvad split clear"
 )
 
 func wantHelp(args []string) bool {
@@ -165,6 +172,10 @@ func main() {
 		err = up(args)
 	case "lockdown":
 		err = lockdownCmd(args)
+	case "run":
+		err = runCmd(args)
+	case "split":
+		err = splitCmd(args)
 	case "status":
 		err = showStatus(args)
 	case "version":
