@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=mvad
+GenericName=Mullvad VPN
+Comment=Mullvad VPN client
+Exec=mvad-gui
+Icon=mvad
+Terminal=false
+Categories=Network;
+StartupWMClass=mvad
