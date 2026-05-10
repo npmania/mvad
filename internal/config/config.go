@@ -38,6 +38,7 @@ type Config struct {
 	Dark              bool            `json:"dark,omitempty"`
 	DarkSet           bool            `json:"dark_set,omitempty"`
 	Favorites         []string        `json:"favorites,omitempty"`
+	SplitApps         []string        `json:"split_apps,omitempty"`
 }
 
 func path() (string, error) {
