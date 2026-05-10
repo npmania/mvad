@@ -66,6 +66,16 @@ func addPID(pid int) error {
 	return writeProcs(filepath.Join(cgroupDir, "cgroup.procs"), pid)
 }
 
+func rmPID(pid int) error {
+	if !available() {
+		return ErrUnavailable
+	}
+	if pid <= 0 {
+		return fmt.Errorf("split: invalid pid %d", pid)
+	}
+	return writeProcs(filepath.Join(cgroupRoot, "cgroup.procs"), pid)
+}
+
 func listPIDs() ([]int, error) {
 	if !cgroupExists() {
 		return nil, ErrUnavailable

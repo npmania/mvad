@@ -195,6 +195,9 @@ type state struct {
 	splitErr     error
 	splitLoading bool
 	splitLoaded  bool
+	splitClicks  map[int]*widget.Clickable
+	splitArmed   map[int]time.Time
+	splitRemoving int
 	runStarting  []string
 
 	favClicks     map[string]*widget.Clickable
@@ -276,6 +279,8 @@ func main() {
 	st.rowClicks = map[string]*widget.Clickable{}
 	st.deviceClicks = map[string]*widget.Clickable{}
 	st.deviceArmed = map[string]time.Time{}
+	st.splitClicks = map[int]*widget.Clickable{}
+	st.splitArmed = map[int]time.Time{}
 	st.favClicks = map[string]*widget.Clickable{}
 	st.splitList.Axis = layout.Vertical
 	st.addPID.SingleLine = true
@@ -549,6 +554,11 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 					}
 				}
 			case "split":
+				if st.splitRemoving != 0 {
+					delete(st.splitClicks, st.splitRemoving)
+					delete(st.splitArmed, st.splitRemoving)
+					st.splitRemoving = 0
+				}
 				if !st.splitLoading {
 					st.splitLoading = true
 					go loadSplit(st.ctx, w, st.splitDone)
@@ -571,6 +581,20 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 			} else {
 				st.splitErr = nil
 				st.splitPIDs = r.pids
+				keep := make(map[int]bool, len(st.splitPIDs))
+				for _, p := range st.splitPIDs {
+					keep[p.pid] = true
+				}
+				for pid := range st.splitClicks {
+					if !keep[pid] {
+						delete(st.splitClicks, pid)
+					}
+				}
+				for pid := range st.splitArmed {
+					if !keep[pid] {
+						delete(st.splitArmed, pid)
+					}
+				}
 			}
 		case r := <-st.runDone:
 			for i, c := range st.runStarting {
@@ -737,6 +761,35 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 			}
 			if !st.clearArmed.IsZero() && time.Since(st.clearArmed) >= 5*time.Second {
 				st.clearArmed = time.Time{}
+			}
+			now := time.Now()
+			for _, p := range st.splitPIDs {
+				c, ok := st.splitClicks[p.pid]
+				if !ok {
+					c = &widget.Clickable{}
+					st.splitClicks[p.pid] = c
+				}
+				if !c.Clicked(gtx) {
+					continue
+				}
+				if t, armed := st.splitArmed[p.pid]; armed && now.Sub(t) < 5*time.Second {
+					delete(st.splitArmed, p.pid)
+					if !st.running {
+						st.cmdErr = nil
+						st.cmdOut = ""
+						st.running = true
+						st.runningName = "split-rm"
+						st.splitRemoving = p.pid
+						go runCmd(st.ctx, w, st.cmdDone, "split", "rm-pid", strconv.Itoa(p.pid))
+					}
+				} else {
+					st.splitArmed[p.pid] = now
+				}
+			}
+			for pid, t := range st.splitArmed {
+				if now.Sub(t) >= 5*time.Second {
+					delete(st.splitArmed, pid)
+				}
 			}
 			if st.allowLAN.Update(gtx) {
 				st.cfg.AllowLAN = st.allowLAN.Value
@@ -2437,13 +2490,13 @@ func splitListArea(gtx layout.Context, th *material.Theme, st *state, pal palett
 	list := material.List(th, &st.splitList)
 	return list.Layout(gtx, rows, func(gtx layout.Context, i int) layout.Dimensions {
 		if i < len(st.splitPIDs) {
-			return splitPIDRow(gtx, th, pal, st.splitPIDs[i])
+			return splitPIDRow(gtx, th, st, pal, st.splitPIDs[i])
 		}
 		return splitPendingRow(gtx, th, pal, st.runStarting[i-len(st.splitPIDs)])
 	})
 }
 
-func splitPIDRow(gtx layout.Context, th *material.Theme, pal palette, p splitPID) layout.Dimensions {
+func splitPIDRow(gtx layout.Context, th *material.Theme, st *state, pal palette, p splitPID) layout.Dimensions {
 	return layout.Inset{Top: unit.Dp(2), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -2457,6 +2510,30 @@ func splitPIDRow(gtx layout.Context, th *material.Theme, pal palette, p splitPID
 				lbl := material.Label(th, unit.Sp(13), p.comm)
 				lbl.Color = pal.muted
 				return lbl.Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				if st.splitRemoving == p.pid {
+					lbl := material.Label(th, unit.Sp(12), "removing…")
+					lbl.Color = pal.muted
+					return lbl.Layout(gtx)
+				}
+				c, ok := st.splitClicks[p.pid]
+				if !ok {
+					c = &widget.Clickable{}
+					st.splitClicks[p.pid] = c
+				}
+				label := "✕"
+				col := pal.muted
+				if t, armed := st.splitArmed[p.pid]; armed && time.Since(t) < 5*time.Second {
+					label = "Confirm?"
+					col = pal.errFg
+				}
+				return c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Label(th, unit.Sp(13), label)
+					lbl.Color = col
+					return lbl.Layout(gtx)
+				})
 			}),
 		)
 	})

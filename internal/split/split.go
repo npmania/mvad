@@ -26,6 +26,7 @@ var (
 func Up(gw netip.Addr, dev string) error { return up(gw, dev) }
 func Down() error                        { return down() }
 func AddPID(pid int) error               { return addPID(pid) }
+func RmPID(pid int) error                { return rmPID(pid) }
 func ListPIDs() ([]int, error)           { return listPIDs() }
 func Clear() error                       { return clear() }
 func Available() bool                    { return available() }

@@ -92,8 +92,9 @@ const (
 	usageLockdownOff     = "usage: mvad lockdown off"
 	usageLockdownRefresh = "usage: mvad lockdown refresh"
 	usageRun             = "usage: mvad run [--] <command> [args...]"
-	usageSplit           = "usage: mvad split <add-pid|list|clear>"
+	usageSplit           = "usage: mvad split <add-pid|rm-pid|list|clear>"
 	usageSplitAddPID     = "usage: mvad split add-pid <pid>"
+	usageSplitRmPID      = "usage: mvad split rm-pid <pid>"
 	usageSplitList       = "usage: mvad split list"
 	usageSplitClear      = "usage: mvad split clear"
 )

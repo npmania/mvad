@@ -54,6 +54,8 @@ func splitCmd(args []string) error {
 		return nil
 	case "add-pid":
 		return splitAddPID(rest)
+	case "rm-pid":
+		return splitRmPID(rest)
 	case "list":
 		return splitList(rest)
 	case "clear":
@@ -79,6 +81,24 @@ func splitAddPID(args []string) error {
 		return usagef("invalid pid %q", args[0])
 	}
 	return split.AddPID(pid)
+}
+
+func splitRmPID(args []string) error {
+	if wantHelp(args) {
+		fmt.Println(usageSplitRmPID)
+		return nil
+	}
+	if os.Geteuid() != 0 {
+		return errors.New("this command needs root; rerun with sudo")
+	}
+	if len(args) != 1 {
+		return usagef(usageSplitRmPID)
+	}
+	pid, err := strconv.Atoi(args[0])
+	if err != nil || pid <= 0 {
+		return usagef("invalid pid %q", args[0])
+	}
+	return split.RmPID(pid)
 }
 
 func splitList(args []string) error {
