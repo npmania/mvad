@@ -140,6 +140,8 @@ type state struct {
 	loginErr   string
 	signupOut  string
 
+	viaEntry widget.Editor
+
 	acctRefresh    widget.Clickable
 	acctRefreshing bool
 	acctRefreshErr string
@@ -249,6 +251,7 @@ func main() {
 	st.runCmdEd.SingleLine = true
 	st.loginToken.SingleLine = true
 	st.loginKey.SingleLine = true
+	st.viaEntry.SingleLine = true
 
 	cfg, err := config.Load()
 	if err != nil || cfg == nil {
@@ -712,19 +715,29 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 					st.runningName = "disconnect"
 					go runCmd(st.ctx, w, st.cmdDone, "disconnect")
 				} else if st.selected != "" {
-					st.cmdErr = nil
-					st.cmdOut = ""
-					st.running = true
-					st.runningName = "connect"
-					args := []string{"connect"}
-					if st.allowLAN.Value {
-						args = append(args, "--allow-lan")
+					varg, err := viaArg(st)
+					if err != nil {
+						st.cmdName = "connect"
+						st.cmdErr = err
+						st.cmdOut = ""
+					} else {
+						st.cmdErr = nil
+						st.cmdOut = ""
+						st.running = true
+						st.runningName = "connect"
+						args := []string{"connect"}
+						if st.allowLAN.Value {
+							args = append(args, "--allow-lan")
+						}
+						if st.transport == "tcp" {
+							args = append(args, "--transport=tcp", fmt.Sprintf("--port=%d", st.tcpPort))
+						}
+						if varg != "" {
+							args = append(args, varg)
+						}
+						args = append(args, "--", st.selected)
+						go runCmd(st.ctx, w, st.cmdDone, args...)
 					}
-					if st.transport == "tcp" {
-						args = append(args, "--transport=tcp", fmt.Sprintf("--port=%d", st.tcpPort))
-					}
-					args = append(args, "--", st.selected)
-					go runCmd(st.ctx, w, st.cmdDone, args...)
 				}
 			}
 			if !st.running && st.reconnect.Clicked(gtx) && st.cfg.LastRelay != "" {
@@ -1027,7 +1040,11 @@ func disconnectedBody(gtx layout.Context, th *material.Theme, st *state, pal pal
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			return relayListArea(gtx, th, st, pal, rows)
 		}),
-		layout.Rigid(layout.Spacer{Height: unit.Dp(28)}.Layout),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return splitEditor(gtx, th, &st.viaEntry, pal, "Multihop entry (optional)")
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return actionButton(gtx, th, &st.btn, pal, "Connect", btnDisabled, st.runningName == "connect")
 		}),
@@ -1993,6 +2010,13 @@ func runCmd(ctx context.Context, w *app.Window, done chan<- cmdResult, args ...s
 }
 
 func startConnect(st *state, w *app.Window, relay string) {
+	varg, err := viaArg(st)
+	if err != nil {
+		st.cmdName = "connect"
+		st.cmdErr = err
+		st.cmdOut = ""
+		return
+	}
 	st.cmdErr = nil
 	st.cmdOut = ""
 	st.running = true
@@ -2004,8 +2028,24 @@ func startConnect(st *state, w *app.Window, relay string) {
 	if st.transport == "tcp" {
 		args = append(args, "--transport=tcp", fmt.Sprintf("--port=%d", st.tcpPort))
 	}
+	if varg != "" {
+		args = append(args, varg)
+	}
 	args = append(args, "--", relay)
 	go runCmd(st.ctx, w, st.cmdDone, args...)
+}
+
+func viaArg(st *state) (string, error) {
+	v := strings.TrimSpace(st.viaEntry.Text())
+	if v == "" {
+		return "", nil
+	}
+	for i := range st.relays {
+		if st.relays[i].Hostname == v {
+			return "--via=" + v, nil
+		}
+	}
+	return "", fmt.Errorf("multihop entry not found: %s", v)
 }
 
 func addFavorite(st *state, tr tray, relay string) {
