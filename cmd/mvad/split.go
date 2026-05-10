@@ -14,9 +14,12 @@ import (
 )
 
 func runCmd(args []string) error {
-	if wantHelp(args) {
-		fmt.Println(usageRun)
-		return nil
+	if len(args) > 0 {
+		switch args[0] {
+		case "-h", "--h", "-help", "--help":
+			fmt.Println(usageRun)
+			return nil
+		}
 	}
 	if os.Geteuid() != 0 {
 		return errors.New("this command needs root; rerun with sudo")
