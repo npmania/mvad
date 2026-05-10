@@ -34,13 +34,13 @@ func path() (string, error) {
 	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
 		return filepath.Join(dir, "mvad", "config.json"), nil
 	}
-	su, err := resolveSudoUser()
+	su, err := ResolveSudoUser()
 	if err != nil {
 		return "", err
 	}
 	home := ""
 	if su != nil {
-		home = su.home
+		home = su.Home
 	} else {
 		home, err = os.UserHomeDir()
 		if err != nil {
@@ -50,12 +50,12 @@ func path() (string, error) {
 	return filepath.Join(home, ".config", "mvad", "config.json"), nil
 }
 
-type sudoUser struct {
-	home     string
-	uid, gid int
+type SudoUser struct {
+	Home     string
+	UID, GID int
 }
 
-func resolveSudoUser() (*sudoUser, error) {
+func ResolveSudoUser() (*SudoUser, error) {
 	if os.Geteuid() != 0 {
 		return nil, nil
 	}
@@ -75,7 +75,7 @@ func resolveSudoUser() (*sudoUser, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &sudoUser{home: u.HomeDir, uid: uid, gid: gid}, nil
+	return &SudoUser{Home: u.HomeDir, UID: uid, GID: gid}, nil
 }
 
 func Load() (*Config, error) {
@@ -97,7 +97,7 @@ func Load() (*Config, error) {
 	return c, nil
 }
 
-func mkdirChown(dir string, mode os.FileMode, su *sudoUser) error {
+func mkdirChown(dir string, mode os.FileMode, su *SudoUser) error {
 	var toMake []string
 	cur := dir
 	for {
@@ -118,7 +118,7 @@ func mkdirChown(dir string, mode os.FileMode, su *sudoUser) error {
 			return err
 		}
 		if su != nil {
-			if err := os.Chown(toMake[i], su.uid, su.gid); err != nil {
+			if err := os.Chown(toMake[i], su.UID, su.GID); err != nil {
 				return err
 			}
 		}
@@ -131,7 +131,7 @@ func (c *Config) Save() error {
 	if err != nil {
 		return err
 	}
-	su, err := resolveSudoUser()
+	su, err := ResolveSudoUser()
 	if err != nil {
 		return err
 	}
@@ -158,7 +158,7 @@ func (c *Config) Save() error {
 		return err
 	}
 	if su != nil {
-		if err := os.Chown(name, su.uid, su.gid); err != nil {
+		if err := os.Chown(name, su.UID, su.GID); err != nil {
 			os.Remove(name)
 			return err
 		}
