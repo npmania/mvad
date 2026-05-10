@@ -152,7 +152,7 @@ type state struct {
 	clearBtn     widget.Clickable
 	clearArmed   time.Time
 	splitPIDs    []splitPID
-	splitErr     string
+	splitErr     error
 	splitLoading bool
 	splitLoaded  bool
 	runStarting  []string
@@ -454,10 +454,10 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 			st.splitLoading = false
 			st.splitLoaded = true
 			if r.err != nil {
-				st.splitErr = r.err.Error()
+				st.splitErr = r.err
 				st.splitPIDs = nil
 			} else {
-				st.splitErr = ""
+				st.splitErr = nil
 				st.splitPIDs = r.pids
 			}
 		case r := <-st.runDone:
@@ -2120,8 +2120,8 @@ func splitRefreshGlyph(gtx layout.Context, th *material.Theme, st *state, pal pa
 }
 
 func splitListArea(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
-	if st.splitErr != "" {
-		return splitErrorPlaceholder(gtx, th, pal, st.splitErr)
+	if st.splitErr != nil {
+		return splitErrorPlaceholder(gtx, th, pal, st.splitErr, st.snap.Up)
 	}
 	if st.splitLoading && len(st.splitPIDs) == 0 && len(st.runStarting) == 0 {
 		return centerLabel(gtx, th, pal.muted, "loading…")
@@ -2177,11 +2177,15 @@ func splitPendingRow(gtx layout.Context, th *material.Theme, pal palette, cmdlin
 	})
 }
 
-func splitErrorPlaceholder(gtx layout.Context, th *material.Theme, pal palette, msg string) layout.Dimensions {
+func splitErrorPlaceholder(gtx layout.Context, th *material.Theme, pal palette, err error, up bool) layout.Dimensions {
+	msg := firstLine(err.Error())
+	if errors.Is(err, split.ErrUnavailable) && !up {
+		msg = "connect to a relay first to use split-tunnel"
+	}
 	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical, Alignment: layout.Middle}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				lbl := material.Label(th, unit.Sp(13), firstLine(msg))
+				lbl := material.Label(th, unit.Sp(13), msg)
 				lbl.Color = pal.errFg
 				return lbl.Layout(gtx)
 			}),
