@@ -15,16 +15,18 @@ import (
 )
 
 type Config struct {
-	AccountToken    string          `json:"account_token,omitempty"`
-	DeviceID        string          `json:"device_id,omitempty"`
-	PrivateKey      string          `json:"private_key,omitempty"`
-	DeviceIPv4      netip.Prefix    `json:"device_ipv4,omitzero"`
-	DeviceIPv6      netip.Prefix    `json:"device_ipv6,omitzero"`
-	LastRelay       string          `json:"last_relay,omitempty"`
-	LastEntryRelay  string          `json:"last_entry_relay,omitempty"`
-	LastEndpoint    netip.AddrPort  `json:"last_endpoint,omitzero"`
-	RelayCache      json.RawMessage `json:"relay_cache,omitempty"`
-	RelaysFetchedAt time.Time       `json:"relays_fetched_at,omitzero"`
+	AccountToken      string          `json:"account_token,omitempty"`
+	DeviceID          string          `json:"device_id,omitempty"`
+	PrivateKey        string          `json:"private_key,omitempty"`
+	DeviceIPv4        netip.Prefix    `json:"device_ipv4,omitzero"`
+	DeviceIPv6        netip.Prefix    `json:"device_ipv6,omitzero"`
+	LastRelay         string          `json:"last_relay,omitempty"`
+	LastEntryRelay    string          `json:"last_entry_relay,omitempty"`
+	LastEndpoint      netip.AddrPort  `json:"last_endpoint,omitzero"`
+	LastTransport     string          `json:"last_transport,omitempty"`
+	LastTransportPort uint16          `json:"last_transport_port,omitempty"`
+	RelayCache        json.RawMessage `json:"relay_cache,omitempty"`
+	RelaysFetchedAt   time.Time       `json:"relays_fetched_at,omitzero"`
 }
 
 func path() (string, error) {

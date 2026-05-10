@@ -14,6 +14,7 @@ type Config struct {
 	Endpoint netip.AddrPort
 	DNS      []netip.Addr
 	AllowLAN bool
+	TCP      bool
 }
 
 func Up(c Config) error { return up(c) }

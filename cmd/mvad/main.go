@@ -7,12 +7,17 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -24,13 +29,18 @@ import (
 	"github.com/npmania/mvad/internal/mullvad"
 	"github.com/npmania/mvad/internal/route"
 	"github.com/npmania/mvad/internal/status"
+	"github.com/npmania/mvad/internal/udp2tcp"
 	"github.com/npmania/mvad/internal/wg"
 )
 
 const (
-	ifname        = "mvad-wg0"
-	wireguardPort = 51820
+	ifname           = "mvad-wg0"
+	wireguardPort    = 51820
+	udp2tcpLocalPort = 21820
+	udp2tcpPidFile   = "/run/mvad/udp2tcp.pid"
 )
+
+var udp2tcpPorts = map[uint16]bool{80: true, 443: true, 5001: true}
 
 var mullvadDNS = []netip.Addr{netip.MustParseAddr("10.64.0.1")}
 
@@ -96,6 +106,8 @@ func main() {
 	case "version":
 		fmt.Println("mvad", versionString())
 		return
+	case "__udp2tcp":
+		err = udp2tcpShim(args)
 	default:
 		err = usagef("unknown command %q", cmd)
 	}
@@ -435,8 +447,24 @@ func connect(args []string) error {
 	fs.SetOutput(io.Discard)
 	allowLAN := fs.Bool("allow-lan", false, "allow traffic to private LAN ranges")
 	via := fs.String("via", "", "entry relay for multihop")
+	transport := fs.String("transport", "wireguard", "transport: wireguard or tcp")
+	tcpPort := fs.Uint("port", 5001, "udp2tcp gateway TCP port (80, 443, or 5001)")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 1 {
-		return usagef("usage: mvad connect [--allow-lan] [--via <entry>] <relay>")
+		return usagef("usage: mvad connect [--allow-lan] [--via <entry>] [--transport wireguard|tcp [--port 80|443|5001]] <relay>")
+	}
+	useTCP := false
+	switch *transport {
+	case "wireguard":
+	case "tcp":
+		useTCP = true
+	default:
+		return usagef("--transport: must be wireguard or tcp")
+	}
+	if useTCP && !udp2tcpPorts[uint16(*tcpPort)] {
+		return usagef("--port: must be 80, 443, or 5001")
+	}
+	if useTCP && *via != "" {
+		return usagef("--transport tcp does not support --via")
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -469,9 +497,22 @@ func connect(args []string) error {
 		endpoint = netip.AddrPortFrom(entry.IPv4, exit.MultihopPort)
 		entryHost = entry.Hostname
 	}
+	if useTCP {
+		endpoint = netip.AddrPortFrom(exit.IPv4, uint16(*tcpPort))
+	}
+	wgEndpoint := endpoint
+	if useTCP {
+		wgEndpoint = netip.AddrPortFrom(netip.AddrFrom4([4]byte{127, 0, 0, 1}), udp2tcpLocalPort)
+	}
 	cfg.LastRelay = exit.Hostname
 	cfg.LastEntryRelay = entryHost
 	cfg.LastEndpoint = endpoint
+	cfg.LastTransport = ""
+	cfg.LastTransportPort = 0
+	if useTCP {
+		cfg.LastTransport = "tcp"
+		cfg.LastTransportPort = uint16(*tcpPort)
+	}
 	if err := cfg.Save(); err != nil {
 		return err
 	}
@@ -481,7 +522,7 @@ func connect(args []string) error {
 		Address:    cfg.DeviceIPv4,
 		Address6:   cfg.DeviceIPv6,
 		PeerKey:    exit.PublicKey,
-		Endpoint:   endpoint,
+		Endpoint:   wgEndpoint,
 		AllowedIPs: []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0")},
 		MTU:        1380,
 	}
@@ -502,12 +543,22 @@ func connect(args []string) error {
 		Endpoint: endpoint,
 		DNS:      mullvadDNS,
 		AllowLAN: *allowLAN,
+		TCP:      useTCP,
 	}
 	if err := firewall.Up(fcfg); err != nil {
 		dns.Restore(ifname)
 		route.Unset(ifname, endpoint.Addr())
 		wg.Down(ifname)
 		return err
+	}
+	if useTCP {
+		if err := udp2tcpStart(udp2tcpLocalPort, endpoint); err != nil {
+			firewall.Down()
+			dns.Restore(ifname)
+			route.Unset(ifname, endpoint.Addr())
+			wg.Down(ifname)
+			return err
+		}
 	}
 	return nil
 }
@@ -536,6 +587,9 @@ func reconnect(args []string) error {
 	if cfg.LastEntryRelay != "" {
 		cargs = append(cargs, "--via", cfg.LastEntryRelay)
 	}
+	if cfg.LastTransport == "tcp" {
+		cargs = append(cargs, "--transport", "tcp", "--port", strconv.Itoa(int(cfg.LastTransportPort)))
+	}
 	cargs = append(cargs, cfg.LastRelay)
 	if err := disconnect(nil); err != nil {
 		return err
@@ -554,7 +608,7 @@ func disconnect(args []string) error {
 	if cfg, err := config.Load(); err == nil {
 		endpoint = cfg.LastEndpoint.Addr()
 	}
-	return errors.Join(firewall.Down(), dns.Restore(ifname), route.Unset(ifname, endpoint), wg.Down(ifname))
+	return errors.Join(udp2tcpStop(), firewall.Down(), dns.Restore(ifname), route.Unset(ifname, endpoint), wg.Down(ifname))
 }
 
 func showStatus(args []string) error {
@@ -577,6 +631,82 @@ func showStatus(args []string) error {
 	s.Entry = cfg.LastEntryRelay
 	fmt.Print(status.Plain(s))
 	return nil
+}
+
+func udp2tcpShim(args []string) error {
+	if len(args) != 2 {
+		return errors.New("internal subcommand")
+	}
+	port, err := strconv.Atoi(args[0])
+	if err != nil || port <= 0 || port > 65535 {
+		return errors.New("internal subcommand")
+	}
+	if _, _, err := net.SplitHostPort(args[1]); err != nil {
+		return errors.New("internal subcommand")
+	}
+	udp, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port})
+	if err != nil {
+		return err
+	}
+	defer udp.Close()
+	tcp, err := net.Dial("tcp", args[1])
+	if err != nil {
+		return err
+	}
+	defer tcp.Close()
+	return udp2tcp.Forward(udp, tcp)
+}
+
+func udp2tcpStart(localPort int, remote netip.AddrPort) error {
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(udp2tcpPidFile), 0700); err != nil {
+		return err
+	}
+	cmd := exec.Command(self, "__udp2tcp", strconv.Itoa(localPort), remote.String())
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	pid := []byte(strconv.Itoa(cmd.Process.Pid) + "\n")
+	if err := os.WriteFile(udp2tcpPidFile, pid, 0600); err != nil {
+		cmd.Process.Kill()
+		return err
+	}
+	go cmd.Wait()
+	return nil
+}
+
+func udp2tcpStop() error {
+	data, err := os.ReadFile(udp2tcpPidFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		os.Remove(udp2tcpPidFile)
+		return fmt.Errorf("udp2tcp pidfile: %w", err)
+	}
+	if udp2tcpShimAlive(pid) {
+		p, _ := os.FindProcess(pid)
+		_ = p.Signal(syscall.SIGTERM)
+	}
+	return os.Remove(udp2tcpPidFile)
+}
+
+// udp2tcpShimAlive reports whether pid still names our shim, guarding
+// against PID recycling between connect and disconnect.
+func udp2tcpShimAlive(pid int) bool {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), "__udp2tcp")
 }
 
 func pickRelay(cfg *config.Config, name string) (mullvad.Relay, error) {

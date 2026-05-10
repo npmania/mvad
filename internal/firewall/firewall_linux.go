@@ -60,12 +60,16 @@ func buildScript(c Config) string {
 	if relay.Is6() {
 		relayFam = "ip6"
 	}
+	proto := "udp"
+	if c.TCP {
+		proto = "tcp"
+	}
 
 	fmt.Fprintf(&b, "\tchain output {\n")
 	b.WriteString("\t\ttype filter hook output priority 0; policy drop;\n")
 	b.WriteString("\t\toifname \"lo\" accept\n")
 	fmt.Fprintf(&b, "\t\toifname %q accept\n", c.Iface)
-	fmt.Fprintf(&b, "\t\tudp dport %d %s daddr %s accept\n", port, relayFam, relay)
+	fmt.Fprintf(&b, "\t\t%s dport %d %s daddr %s accept\n", proto, port, relayFam, relay)
 	for _, d := range c.DNS {
 		fam := "ip"
 		if d.Is6() {
@@ -83,7 +87,7 @@ func buildScript(c Config) string {
 	b.WriteString("\t\ttype filter hook input priority 0; policy drop;\n")
 	b.WriteString("\t\tiifname \"lo\" accept\n")
 	fmt.Fprintf(&b, "\t\tiifname %q accept\n", c.Iface)
-	fmt.Fprintf(&b, "\t\tudp sport %d %s saddr %s accept\n", port, relayFam, relay)
+	fmt.Fprintf(&b, "\t\t%s sport %d %s saddr %s accept\n", proto, port, relayFam, relay)
 	if c.AllowLAN {
 		b.WriteString("\t\tip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } accept\n")
 	}
