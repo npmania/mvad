@@ -192,26 +192,37 @@ func tryARGB(conn *xgb.Conn, screen *xproto.ScreenInfo, wid xproto.Window) (byte
 }
 
 func (x *xembed) openFont() {
-	f, err := xproto.NewFontId(x.conn)
-	if err != nil {
+	names := []string{
+		"fixed",
+		"9x15",
+		"9x15bold",
+		"*-*-medium-r-normal--14-*-*-*-*-*-*-*",
+		"*",
+	}
+	for _, name := range names {
+		f, err := xproto.NewFontId(x.conn)
+		if err != nil {
+			continue
+		}
+		if err := xproto.OpenFontChecked(x.conn, f, uint16(len(name)), name).Check(); err != nil {
+			continue
+		}
+		q, err := xproto.QueryFont(x.conn, xproto.Fontable(f)).Reply()
+		if err != nil {
+			xproto.CloseFont(x.conn, f)
+			continue
+		}
+		x.font = f
+		x.fontAscent = int(q.FontAscent)
+		x.fontDescent = int(q.FontDescent)
+		x.charW = int(q.MaxBounds.CharacterWidth)
+		if x.charW <= 0 {
+			x.charW = 7
+		}
+		log.Printf("tray: font %q", name)
 		return
 	}
-	const name = "fixed"
-	if err := xproto.OpenFontChecked(x.conn, f, uint16(len(name)), name).Check(); err != nil {
-		return
-	}
-	q, err := xproto.QueryFont(x.conn, xproto.Fontable(f)).Reply()
-	if err != nil {
-		xproto.CloseFont(x.conn, f)
-		return
-	}
-	x.font = f
-	x.fontAscent = int(q.FontAscent)
-	x.fontDescent = int(q.FontDescent)
-	x.charW = int(q.MaxBounds.CharacterWidth)
-	if x.charW <= 0 {
-		x.charW = 7
-	}
+	log.Printf("tray: no usable X11 font; right-click menu disabled")
 }
 
 func (x *xembed) read() {
@@ -274,6 +285,7 @@ func (x *xembed) handleEvent(ev xgb.Event, shown bool, last []byte) {
 				x.send(trayCmd{kind: cmdShow})
 			}
 		case e.Event == x.wid && e.Detail == 3:
+			log.Printf("tray: popup at %d,%d", e.RootX, e.RootY)
 			x.openPopup(e.RootX, e.RootY, shown)
 		case e.Event == x.popup && e.Detail == 1:
 			x.clickPopup(int(e.EventX), int(e.EventY))
