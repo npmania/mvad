@@ -472,6 +472,10 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 			if st.runningName != "lockdown" {
 				st.lockdownOn.Value = lockdown.Active()
 			}
+			if st.view == viewSplit && st.splitLoaded && !st.splitLoading {
+				st.splitLoading = true
+				go loadSplit(st.ctx, w, st.splitDone)
+			}
 			st.loadedAny = true
 			updateTrayMenu(st, r)
 		case r := <-st.cmdDone:
