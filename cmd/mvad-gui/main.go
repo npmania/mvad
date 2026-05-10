@@ -315,7 +315,7 @@ func layoutUI(gtx layout.Context, th *material.Theme, st *state) {
 
 	layout.Stack{}.Layout(gtx,
 		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
-			return layout.UniformInset(unit.Dp(24)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			dims := layout.UniformInset(unit.Dp(24)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return tabStrip(gtx, th, st, pal)
@@ -326,6 +326,9 @@ func layoutUI(gtx layout.Context, th *material.Theme, st *state) {
 					}),
 				)
 			})
+			dims.Size.X = max(dims.Size.X, gtx.Constraints.Max.X)
+			dims.Size.Y = max(dims.Size.Y, gtx.Constraints.Max.Y)
+			return dims
 		}),
 		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
 			return layout.NE.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
