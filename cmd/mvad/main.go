@@ -412,8 +412,9 @@ func listRelays(args []string) error {
 	owned := fs.String("owned", "", "filter by owned: true or false")
 	protocol := fs.String("protocol", "", "filter by protocol: wireguard")
 	bridges := fs.Bool("bridges", false, "list shadowsocks bridges instead of wireguard relays")
+	refresh := fs.Bool("refresh", false, "force refetch from API, bypassing the 24h cache")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
-		return usagef("usage: mvad relays [--bridges] [--country C]... [--city C]... [--provider P]... [--owned true|false] [--protocol wireguard]")
+		return usagef("usage: mvad relays [--bridges] [--refresh] [--country C]... [--city C]... [--provider P]... [--owned true|false] [--protocol wireguard]")
 	}
 	var wantOwned, filterOwned bool
 	switch *owned {
@@ -455,7 +456,7 @@ func listRelays(args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(cfg.RelayCache) == 0 || time.Since(cfg.RelaysFetchedAt) > 24*time.Hour {
+	if *refresh || len(cfg.RelayCache) == 0 || time.Since(cfg.RelaysFetchedAt) > 24*time.Hour {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		relays, err := mullvad.New().Relays(ctx)
