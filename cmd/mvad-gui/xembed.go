@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"log"
 	"sync"
 
 	"github.com/jezek/xgb"
@@ -59,7 +60,6 @@ func startXEmbed(ctx context.Context, polls <-chan pollResult, windowState <-cha
 	for _, n := range []string{
 		"_NET_SYSTEM_TRAY_S0",
 		"_NET_SYSTEM_TRAY_OPCODE",
-		"_NET_SYSTEM_TRAY_VISUAL",
 		"_XEMBED_INFO",
 	} {
 		r, err := xproto.InternAtom(conn, false, uint16(len(n)), n).Reply()
@@ -81,47 +81,30 @@ func startXEmbed(ctx context.Context, polls <-chan pollResult, windowState <-cha
 	}
 
 	screen := xproto.Setup(conn).DefaultScreen(conn)
-	depth, visual := pickVisual(conn, screen, owner.Owner, atoms["_NET_SYSTEM_TRAY_VISUAL"])
 
 	wid, err := xproto.NewWindowId(conn)
 	if err != nil {
 		conn.Close()
 		return nil, err
 	}
-	var (
-		mask   uint32
-		values []uint32
-	)
-	if depth == screen.RootDepth && visual == screen.RootVisual {
-		mask = xproto.CwBackPixmap | xproto.CwEventMask
-		values = []uint32{
+	depth, ok := tryARGB(conn, screen, wid)
+	if ok {
+		log.Printf("tray: argb")
+	} else {
+		mask := uint32(xproto.CwBackPixmap | xproto.CwEventMask)
+		values := []uint32{
 			xproto.BackPixmapParentRelative,
 			xproto.EventMaskButtonPress | xproto.EventMaskExposure,
 		}
-	} else {
-		cm, err := xproto.NewColormapId(conn)
-		if err != nil {
+		if err := xproto.CreateWindowChecked(conn, screen.RootDepth, wid, screen.Root,
+			0, 0, 22, 22, 0,
+			xproto.WindowClassInputOutput, screen.RootVisual,
+			mask, values).Check(); err != nil {
 			conn.Close()
 			return nil, err
 		}
-		if err := xproto.CreateColormapChecked(conn, xproto.ColormapAllocNone, cm, screen.Root, visual).Check(); err != nil {
-			conn.Close()
-			return nil, err
-		}
-		mask = xproto.CwBackPixel | xproto.CwBorderPixel | xproto.CwEventMask | xproto.CwColormap
-		values = []uint32{
-			0,
-			0,
-			xproto.EventMaskButtonPress | xproto.EventMaskExposure,
-			uint32(cm),
-		}
-	}
-	if err := xproto.CreateWindowChecked(conn, depth, wid, screen.Root,
-		0, 0, 22, 22, 0,
-		xproto.WindowClassInputOutput, visual,
-		mask, values).Check(); err != nil {
-		conn.Close()
-		return nil, err
+		depth = screen.RootDepth
+		log.Printf("tray: rgb")
 	}
 
 	info := make([]byte, 8)
@@ -169,27 +152,43 @@ func startXEmbed(ctx context.Context, polls <-chan pollResult, windowState <-cha
 	return x, nil
 }
 
-// pickVisual reads _NET_SYSTEM_TRAY_VISUAL from the tray manager and
-// looks the id up in the screen's depth list. ARGB panels advertise a
-// depth-32 TrueColor visual; absent or unknown means stick with the
-// root visual.
-func pickVisual(conn *xgb.Conn, screen *xproto.ScreenInfo, owner xproto.Window, atom xproto.Atom) (byte, xproto.Visualid) {
-	r, err := xproto.GetProperty(conn, false, owner, atom, xproto.AtomCardinal, 0, 1).Reply()
-	if err != nil || r == nil || r.Format != 32 || r.ValueLen < 1 || len(r.Value) < 4 {
-		return screen.RootDepth, screen.RootVisual
-	}
-	id := xproto.Visualid(xgb.Get32(r.Value))
-	if id == 0 {
-		return screen.RootDepth, screen.RootVisual
-	}
+// tryARGB attempts to create an ARGB tray window using the first
+// depth-32 TrueColor visual the screen advertises. tint2 doesn't
+// broadcast _NET_SYSTEM_TRAY_VISUAL, so we don't ask, we just try.
+func tryARGB(conn *xgb.Conn, screen *xproto.ScreenInfo, wid xproto.Window) (byte, bool) {
 	for _, d := range screen.AllowedDepths {
+		if d.Depth != 32 {
+			continue
+		}
 		for _, v := range d.Visuals {
-			if v.VisualId == id {
-				return d.Depth, id
+			if v.Class != xproto.VisualClassTrueColor {
+				continue
 			}
+			cm, err := xproto.NewColormapId(conn)
+			if err != nil {
+				return 0, false
+			}
+			if err := xproto.CreateColormapChecked(conn, xproto.ColormapAllocNone, cm, screen.Root, v.VisualId).Check(); err != nil {
+				continue
+			}
+			mask := uint32(xproto.CwBackPixel | xproto.CwBorderPixel | xproto.CwEventMask | xproto.CwColormap)
+			values := []uint32{
+				0,
+				0,
+				xproto.EventMaskButtonPress | xproto.EventMaskExposure,
+				uint32(cm),
+			}
+			if err := xproto.CreateWindowChecked(conn, 32, wid, screen.Root,
+				0, 0, 22, 22, 0,
+				xproto.WindowClassInputOutput, v.VisualId,
+				mask, values).Check(); err != nil {
+				xproto.FreeColormap(conn, cm)
+				continue
+			}
+			return 32, true
 		}
 	}
-	return screen.RootDepth, screen.RootVisual
+	return 0, false
 }
 
 func (x *xembed) openFont() {
