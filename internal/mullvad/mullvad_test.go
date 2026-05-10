@@ -135,6 +135,16 @@ func TestCreateAccount(t *testing.T) {
 	}
 }
 
+func TestCreateAccountEmptyNumber(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"number":""}`))
+	}))
+	_, err := c.CreateAccount(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "empty account number") {
+		t.Fatalf("err = %v, want empty account number error", err)
+	}
+}
+
 func TestAccountExpiry(t *testing.T) {
 	var tokenCalls atomic.Int32
 	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
