@@ -61,6 +61,7 @@ The commands are:
 	connect     connect to a relay
 	disconnect  disconnect
 	reconnect   reconnect to the last relay
+	up          stay connected; reconnect on default-route changes
 	lockdown    install or remove the persistent kill-switch
 	status      print connection status
 	version     print version
@@ -78,6 +79,7 @@ const (
 	usageRelays          = "usage: mvad relays [--bridges] [--refresh] [--country C]... [--city C]... [--provider P]... [--owned true|false] [--protocol wireguard]"
 	usageConnect         = "usage: mvad connect [--allow-lan] [--via <entry>] [--transport wireguard|tcp|shadowsocks [--port 80|443|5001] [--bridge <host>]] <relay>"
 	usageReconnect       = "usage: mvad reconnect [--allow-lan]"
+	usageUp              = "usage: mvad up [--allow-lan] [--via <entry>] [--transport wireguard|tcp|shadowsocks [--port 80|443|5001] [--bridge <host>]] <relay>"
 	usageDisconnect      = "usage: mvad disconnect"
 	usageStatus          = "usage: mvad status [--format json|waybar] [--refresh]"
 	usageLockdown        = "usage: mvad lockdown <on|off|refresh>"
@@ -158,6 +160,8 @@ func main() {
 		err = disconnect(args)
 	case "reconnect":
 		err = reconnect(args)
+	case "up":
+		err = up(args)
 	case "lockdown":
 		err = lockdownCmd(args)
 	case "status":
@@ -581,7 +585,56 @@ func pickBridge(bs []mullvad.Bridge, name string) (mullvad.Bridge, error) {
 	return mullvad.Bridge{}, fmt.Errorf("bridge %q not found", name)
 }
 
-func connect(args []string) (retErr error) {
+type connectOpts struct {
+	relay     string
+	via       string
+	allowLAN  bool
+	transport string
+	tcpPort   uint16
+	bridge    string
+}
+
+func parseConnectOpts(args []string, usage string) (connectOpts, error) {
+	var o connectOpts
+	fs := flag.NewFlagSet("", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.BoolVar(&o.allowLAN, "allow-lan", false, "allow traffic to private LAN ranges")
+	fs.StringVar(&o.via, "via", "", "entry relay for multihop")
+	fs.StringVar(&o.transport, "transport", "wireguard", "transport: wireguard, tcp, or shadowsocks")
+	tcpPort := fs.Uint("port", 5001, "udp2tcp gateway TCP port (80, 443, or 5001)")
+	fs.StringVar(&o.bridge, "bridge", "", "shadowsocks bridge hostname")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return o, flag.ErrHelp
+		}
+		return o, usagef("%s", usage)
+	}
+	if fs.NArg() != 1 {
+		return o, usagef("%s", usage)
+	}
+	o.relay = fs.Arg(0)
+	o.tcpPort = uint16(*tcpPort)
+	switch o.transport {
+	case "wireguard", "tcp", "shadowsocks":
+	default:
+		return o, usagef("--transport: must be wireguard, tcp, or shadowsocks")
+	}
+	if o.transport == "tcp" && !udp2tcpPorts[o.tcpPort] {
+		return o, usagef("--port: must be 80, 443, or 5001")
+	}
+	if o.transport != "wireguard" && o.via != "" {
+		return o, usagef("--transport %s does not support --via", o.transport)
+	}
+	if o.transport == "shadowsocks" && o.bridge == "" {
+		return o, usagef("--transport shadowsocks requires --bridge <host>")
+	}
+	if o.transport != "shadowsocks" && o.bridge != "" {
+		return o, usagef("--bridge requires --transport shadowsocks")
+	}
+	return o, nil
+}
+
+func connect(args []string) error {
 	if wantHelp(args) {
 		fmt.Println(usageConnect)
 		return nil
@@ -594,57 +647,31 @@ func connect(args []string) (retErr error) {
 		return err
 	}
 	defer release()
-	var relay string
+	opts, err := parseConnectOpts(args, usageConnect)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Println(usageConnect)
+			return nil
+		}
+		return err
+	}
+	return doConnect(opts)
+}
+
+func doConnect(opts connectOpts) (retErr error) {
 	defer func() {
 		var uerr *usageError
 		if errors.As(retErr, &uerr) {
 			return
 		}
 		if retErr == nil {
-			notify.Send("mvad", "connected to "+relay)
+			notify.Send("mvad", "connected to "+opts.relay)
 		} else {
 			notify.Send("mvad: connect failed", retErr.Error())
 		}
 	}()
-	fs := flag.NewFlagSet("connect", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	allowLAN := fs.Bool("allow-lan", false, "allow traffic to private LAN ranges")
-	via := fs.String("via", "", "entry relay for multihop")
-	transport := fs.String("transport", "wireguard", "transport: wireguard, tcp, or shadowsocks")
-	tcpPort := fs.Uint("port", 5001, "udp2tcp gateway TCP port (80, 443, or 5001)")
-	bridge := fs.String("bridge", "", "shadowsocks bridge hostname")
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			fmt.Println(usageConnect)
-			return nil
-		}
-		return usagef(usageConnect)
-	}
-	if fs.NArg() != 1 {
-		return usagef(usageConnect)
-	}
-	useTCP, useSS := false, false
-	switch *transport {
-	case "wireguard":
-	case "tcp":
-		useTCP = true
-	case "shadowsocks":
-		useSS = true
-	default:
-		return usagef("--transport: must be wireguard, tcp, or shadowsocks")
-	}
-	if useTCP && !udp2tcpPorts[uint16(*tcpPort)] {
-		return usagef("--port: must be 80, 443, or 5001")
-	}
-	if (useTCP || useSS) && *via != "" {
-		return usagef("--transport %s does not support --via", *transport)
-	}
-	if useSS && *bridge == "" {
-		return usagef("--transport shadowsocks requires --bridge <host>")
-	}
-	if !useSS && *bridge != "" {
-		return usagef("--bridge requires --transport shadowsocks")
-	}
+	useTCP := opts.transport == "tcp"
+	useSS := opts.transport == "shadowsocks"
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -664,15 +691,14 @@ func connect(args []string) (retErr error) {
 	if err != nil {
 		return fmt.Errorf("parse stored private key: %w (run mvad rotate-key to regenerate)", err)
 	}
-	exit, err := pickRelay(cfg, fs.Arg(0))
+	exit, err := pickRelay(cfg, opts.relay)
 	if err != nil {
 		return fmt.Errorf("pick exit relay: %w (run mvad relays --refresh to update the cache)", err)
 	}
-	relay = exit.Hostname
 	endpoint := netip.AddrPortFrom(exit.IPv4, wireguardPort)
 	entryHost := ""
-	if *via != "" {
-		entry, err := pickRelay(cfg, *via)
+	if opts.via != "" {
+		entry, err := pickRelay(cfg, opts.via)
 		if err != nil {
 			return fmt.Errorf("pick entry relay: %w (run mvad relays --refresh to update the cache)", err)
 		}
@@ -683,7 +709,7 @@ func connect(args []string) (retErr error) {
 		entryHost = entry.Hostname
 	}
 	if useTCP {
-		endpoint = netip.AddrPortFrom(exit.IPv4, uint16(*tcpPort))
+		endpoint = netip.AddrPortFrom(exit.IPv4, opts.tcpPort)
 	}
 	var ssBridge mullvad.Bridge
 	var ssEnd mullvad.ShadowsocksEndpoint
@@ -694,7 +720,7 @@ func connect(args []string) (retErr error) {
 		if err != nil {
 			return fmt.Errorf("fetch shadowsocks bridges: %w", err)
 		}
-		ssBridge, err = pickBridge(bridges, *bridge)
+		ssBridge, err = pickBridge(bridges, opts.bridge)
 		if err != nil {
 			return fmt.Errorf("pick bridge: %w", err)
 		}
@@ -716,7 +742,7 @@ func connect(args []string) (retErr error) {
 	cfg.LastBridge = ""
 	if useTCP {
 		cfg.LastTransport = "tcp"
-		cfg.LastTransportPort = uint16(*tcpPort)
+		cfg.LastTransportPort = opts.tcpPort
 	}
 	if useSS {
 		cfg.LastTransport = "shadowsocks"
@@ -751,7 +777,7 @@ func connect(args []string) (retErr error) {
 		Iface:    ifname,
 		Endpoint: endpoint,
 		DNS:      mullvadDNS,
-		AllowLAN: *allowLAN,
+		AllowLAN: opts.allowLAN,
 		TCP:      useTCP,
 	}
 	if err := firewall.Up(fcfg); err != nil {
@@ -815,24 +841,24 @@ func reconnect(args []string) error {
 	if cfg.LastRelay == "" {
 		return errors.New("no previous connection to reconnect to")
 	}
-	var cargs []string
-	if *allowLAN {
-		cargs = append(cargs, "--allow-lan")
+	opts := connectOpts{
+		relay:     cfg.LastRelay,
+		via:       cfg.LastEntryRelay,
+		allowLAN:  *allowLAN,
+		transport: "wireguard",
 	}
-	if cfg.LastEntryRelay != "" {
-		cargs = append(cargs, "--via", cfg.LastEntryRelay)
+	switch cfg.LastTransport {
+	case "tcp":
+		opts.transport = "tcp"
+		opts.tcpPort = cfg.LastTransportPort
+	case "shadowsocks":
+		opts.transport = "shadowsocks"
+		opts.bridge = cfg.LastBridge
 	}
-	if cfg.LastTransport == "tcp" {
-		cargs = append(cargs, "--transport", "tcp", "--port", strconv.Itoa(int(cfg.LastTransportPort)))
-	}
-	if cfg.LastTransport == "shadowsocks" {
-		cargs = append(cargs, "--transport", "shadowsocks", "--bridge", cfg.LastBridge)
-	}
-	cargs = append(cargs, cfg.LastRelay)
-	if err := disconnect(nil); err != nil {
+	if err := doDisconnect(); err != nil {
 		return err
 	}
-	return connect(cargs)
+	return doConnect(opts)
 }
 
 func disconnect(args []string) error {
@@ -851,6 +877,10 @@ func disconnect(args []string) error {
 		return err
 	}
 	defer release()
+	return doDisconnect()
+}
+
+func doDisconnect() error {
 	var endpoint netip.Addr
 	if cfg, err := config.Load(); err == nil {
 		endpoint = cfg.LastEndpoint.Addr()

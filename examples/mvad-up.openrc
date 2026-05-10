@@ -1,0 +1,12 @@
+#!/sbin/openrc-run
+
+description="mvad tunnel"
+relay="${relay:-se-sto-wg-001}"
+command="/usr/bin/mvad"
+command_args="up ${relay}"
+command_background="yes"
+pidfile="/run/mvad-up.pid"
+
+depend() {
+	need net
+}
