@@ -175,6 +175,10 @@ const (
 	cmdHide
 )
 
+type tray interface {
+	shutdown()
+}
+
 var errQuit = errors.New("quit")
 
 func setWindowState(ch chan bool, s bool) {
@@ -250,15 +254,14 @@ func main() {
 	go pollStatus(ctx, pollsWin, pollsTray)
 
 	conn, err := dbus.SessionBus()
-	var tr *tray
+	var tr tray
 	if err == nil && sniWatcherOwned(conn) {
 		tr, err = startSNI(ctx, conn, pollsTray, windowState, trayCmds)
 	} else {
-		err = errors.New("no SNI watcher; running windowed-only")
-		tr = nil
+		tr, err = startXEmbed(ctx, pollsTray, windowState, trayCmds)
 	}
 	if err != nil {
-		log.Printf("tray: %v", err)
+		log.Printf("tray: %v (no SNI watcher and no system tray; running windowed-only)", err)
 		tr = nil
 	}
 

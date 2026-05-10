@@ -44,7 +44,7 @@ type menuItemProps struct {
 	Props map[string]dbus.Variant
 }
 
-type tray struct {
+type sni struct {
 	conn    *dbus.Conn
 	busName string
 	props   *prop.Properties
@@ -63,7 +63,7 @@ func sniWatcherOwned(conn *dbus.Conn) bool {
 	return err == nil && has
 }
 
-func startSNI(ctx context.Context, conn *dbus.Conn, polls <-chan pollResult, windowState <-chan bool, cmds chan<- trayCmd) (*tray, error) {
+func startSNI(ctx context.Context, conn *dbus.Conn, polls <-chan pollResult, windowState <-chan bool, cmds chan<- trayCmd) (*sni, error) {
 	busName := "org.kde.StatusNotifierItem-" + strconv.Itoa(os.Getpid()) + "-1"
 	reply, err := conn.RequestName(busName, dbus.NameFlagDoNotQueue)
 	if err != nil {
@@ -73,7 +73,7 @@ func startSNI(ctx context.Context, conn *dbus.Conn, polls <-chan pollResult, win
 		return nil, fmt.Errorf("dbus: bus name %s not primary (%v)", busName, reply)
 	}
 
-	t := &tray{conn: conn, busName: busName, cmds: cmds}
+	t := &sni{conn: conn, busName: busName, cmds: cmds}
 
 	if err := conn.Export(sniHandler{t}, sniPath, sniIface); err != nil {
 		t.shutdown()
@@ -136,7 +136,7 @@ func startSNI(ctx context.Context, conn *dbus.Conn, polls <-chan pollResult, win
 	return t, nil
 }
 
-func (t *tray) loop(ctx context.Context, polls <-chan pollResult, windowState <-chan bool) {
+func (t *sni) loop(ctx context.Context, polls <-chan pollResult, windowState <-chan bool) {
 	defer close(t.done)
 	for {
 		select {
@@ -163,7 +163,7 @@ func (t *tray) loop(ctx context.Context, polls <-chan pollResult, windowState <-
 	}
 }
 
-func (t *tray) refresh(up bool) {
+func (t *sni) refresh(up bool) {
 	pm := pmDown
 	body := "disconnected"
 	if up {
@@ -177,7 +177,7 @@ func (t *tray) refresh(up bool) {
 	_ = t.conn.Emit(sniPath, sniIface+".NewToolTip")
 }
 
-func (t *tray) shutdown() {
+func (t *sni) shutdown() {
 	if t.conn == nil {
 		return
 	}
@@ -191,7 +191,7 @@ func (t *tray) shutdown() {
 	t.conn = nil
 }
 
-type sniHandler struct{ t *tray }
+type sniHandler struct{ t *sni }
 
 func (s sniHandler) Activate(x, y int32) *dbus.Error {
 	s.send(cmdShow)
@@ -236,7 +236,7 @@ var menuItems = []menuItem{
 	{8, "Quit", false, cmdQuit},
 }
 
-func (t *tray) showHide() (string, trayCmd) {
+func (t *sni) showHide() (string, trayCmd) {
 	t.mu.Lock()
 	s := t.shown
 	t.mu.Unlock()
@@ -246,7 +246,7 @@ func (t *tray) showHide() (string, trayCmd) {
 	return "Show", cmdShow
 }
 
-func (t *tray) itemProps(it menuItem) map[string]dbus.Variant {
+func (t *sni) itemProps(it menuItem) map[string]dbus.Variant {
 	if it.sep {
 		return map[string]dbus.Variant{
 			"type": dbus.MakeVariant("separator"),
@@ -261,7 +261,7 @@ func (t *tray) itemProps(it menuItem) map[string]dbus.Variant {
 	}
 }
 
-type menuHandler struct{ t *tray }
+type menuHandler struct{ t *sni }
 
 func (m menuHandler) GetLayout(parentID, recursionDepth int32, propertyNames []string) (uint32, menuLayout, *dbus.Error) {
 	if parentID != 0 {
