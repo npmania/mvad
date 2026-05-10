@@ -1,0 +1,9 @@
+// Waybar custom module. Paste into ~/.config/waybar/config and add
+// "custom/mvad" to modules-{left,center,right}.
+// CSS classes: #custom-mvad.connected, #custom-mvad.disconnected.
+"custom/mvad": {
+    "exec": "mvad status --format=waybar",
+    "return-type": "json",
+    "interval": 2,
+    "on-click": "pkexec mvad disconnect"
+}

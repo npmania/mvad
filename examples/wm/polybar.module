@@ -1,0 +1,6 @@
+; Polybar. Paste into ~/.config/polybar/config.ini. Requires jq.
+[module/mvad]
+type = custom/script
+exec = mvad status --format=waybar | jq -r .text
+interval = 2
+click-left = pkexec mvad disconnect
