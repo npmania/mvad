@@ -14,6 +14,7 @@ import (
 const (
 	tableName  = "mvad-lockdown"
 	scriptPath = "/var/lib/mvad/lockdown.nft"
+	markerPath = "/run/mvad/lockdown"
 )
 
 var (
@@ -36,6 +37,8 @@ func Refresh(relayIPs []netip.Addr) error {
 	}
 	return refresh(relayIPs)
 }
+
+func Active() bool { return active() }
 
 func hasValid(ips []netip.Addr) bool {
 	for _, ip := range ips {

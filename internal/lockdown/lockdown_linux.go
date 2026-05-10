@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -18,7 +19,11 @@ func on(relayIPs []netip.Addr) error {
 	if err := writeScript(script); err != nil {
 		return err
 	}
-	return runNft(script)
+	if err := runNft(script); err != nil {
+		return err
+	}
+	writeMarker()
+	return nil
 }
 
 func off() error {
@@ -26,6 +31,9 @@ func off() error {
 	rmErr := os.Remove(scriptPath)
 	if errors.Is(rmErr, os.ErrNotExist) {
 		rmErr = nil
+	}
+	if delErr == nil {
+		removeMarker()
 	}
 	return errors.Join(delErr, rmErr)
 }
@@ -43,7 +51,33 @@ func refresh(relayIPs []netip.Addr) error {
 	if !tablePresent() {
 		return nil
 	}
-	return runNft(script)
+	if err := runNft(script); err != nil {
+		return err
+	}
+	writeMarker()
+	return nil
+}
+
+func active() bool {
+	_, err := os.Stat(markerPath)
+	return err == nil
+}
+
+func writeMarker() {
+	dir := filepath.Dir(markerPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		log.Printf("lockdown: mkdir %s: %v", dir, err)
+		return
+	}
+	if err := os.WriteFile(markerPath, nil, 0644); err != nil {
+		log.Printf("lockdown: write %s: %v", markerPath, err)
+	}
+}
+
+func removeMarker() {
+	if err := os.Remove(markerPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		log.Printf("lockdown: remove %s: %v", markerPath, err)
+	}
 }
 
 func writeScript(s string) error {

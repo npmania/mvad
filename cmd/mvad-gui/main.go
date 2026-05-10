@@ -35,6 +35,7 @@ import (
 	"github.com/godbus/dbus/v5"
 
 	"github.com/npmania/mvad/internal/config"
+	"github.com/npmania/mvad/internal/lockdown"
 	"github.com/npmania/mvad/internal/mullvad"
 	"github.com/npmania/mvad/internal/split"
 	"github.com/npmania/mvad/internal/status"
@@ -390,6 +391,9 @@ func main() {
 					if r.err == nil {
 						st.snap = r.snap
 					}
+					if st.runningName != "lockdown" {
+						st.lockdownOn.Value = lockdown.Active()
+					}
 					updateTrayMenu(&st, r)
 				case <-ctx.Done():
 					return
@@ -452,6 +456,9 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 			} else {
 				st.snap = r.snap
 				st.pollErr = nil
+			}
+			if st.runningName != "lockdown" {
+				st.lockdownOn.Value = lockdown.Active()
 			}
 			st.loadedAny = true
 			updateTrayMenu(st, r)
