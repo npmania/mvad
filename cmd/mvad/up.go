@@ -17,6 +17,7 @@ import (
 	"github.com/mdlayher/netlink"
 	"golang.org/x/sys/unix"
 
+	"github.com/npmania/mvad/internal/config"
 	"github.com/npmania/mvad/internal/lock"
 	"github.com/npmania/mvad/internal/notify"
 )
@@ -40,6 +41,13 @@ func up(args []string) error {
 			fmt.Println(usageUp)
 			return nil
 		}
+		return err
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if err := checkLoggedIn(cfg); err != nil {
 		return err
 	}
 

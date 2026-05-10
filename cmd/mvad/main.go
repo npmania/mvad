@@ -217,6 +217,20 @@ func versionString() string {
 	return "(devel)"
 }
 
+func checkLoggedIn(cfg *config.Config) error {
+	if cfg.AccountToken == "" || cfg.DeviceID == "" || cfg.PrivateKey == "" {
+		return errors.New("not logged in; run mvad login <token>")
+	}
+	if !cfg.DeviceIPv4.IsValid() {
+		return errors.New("device address missing; run mvad login <token>")
+	}
+	if !cfg.AccountExpiry.IsZero() && time.Now().After(cfg.AccountExpiry) {
+		return fmt.Errorf("account expired on %s; renew at https://mullvad.net/account",
+			cfg.AccountExpiry.UTC().Format("2006-01-02"))
+	}
+	return nil
+}
+
 func signup(args []string) error {
 	if wantHelp(args) {
 		fmt.Println(usageSignup)
@@ -767,11 +781,8 @@ func doConnect(opts connectOpts) (retErr error) {
 	if err != nil {
 		return err
 	}
-	if cfg.AccountToken == "" || cfg.DeviceID == "" || cfg.PrivateKey == "" {
-		return errors.New("not logged in; run mvad login <token>")
-	}
-	if !cfg.DeviceIPv4.IsValid() {
-		return errors.New("device address missing; run mvad login <token>")
+	if err := checkLoggedIn(cfg); err != nil {
+		return err
 	}
 	if useSS {
 		if _, err := exec.LookPath("ss-local"); err != nil {
@@ -935,6 +946,9 @@ func reconnect(args []string) error {
 	}
 	cfg, err := config.Load()
 	if err != nil {
+		return err
+	}
+	if err := checkLoggedIn(cfg); err != nil {
 		return err
 	}
 	relay := cfg.LastQuery
