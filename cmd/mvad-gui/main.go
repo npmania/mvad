@@ -120,6 +120,10 @@ type state struct {
 	loginErr   string
 	signupOut  string
 
+	acctRefresh    widget.Clickable
+	acctRefreshing bool
+	acctRefreshErr string
+
 	splitList    widget.List
 	splitRefresh widget.Clickable
 	addPID       widget.Editor
@@ -184,6 +188,7 @@ func run(w *app.Window) error {
 	relayDone := make(chan relayLoadResult, 1)
 	splitDone := make(chan splitLoadResult, 1)
 	runDone := make(chan runResult, 1)
+	acctDone := make(chan acctLoadResult, 1)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -276,6 +281,16 @@ func run(w *app.Window) error {
 			if !st.splitLoading {
 				st.splitLoading = true
 				go loadSplit(ctx, w, splitDone)
+			}
+		case r := <-acctDone:
+			st.acctRefreshing = false
+			if r.err != nil {
+				st.acctRefreshErr = r.err.Error()
+			} else {
+				st.acctRefreshErr = ""
+				if c, err := config.Load(); err == nil && c != nil {
+					st.cfg = c
+				}
 			}
 		default:
 		}
@@ -460,6 +475,11 @@ func run(w *app.Window) error {
 			}
 			if !st.logoutArmed.IsZero() && time.Since(st.logoutArmed) >= 5*time.Second {
 				st.logoutArmed = time.Time{}
+			}
+			if !st.acctRefreshing && st.acctRefresh.Clicked(gtx) && st.cfg.AccountToken != "" {
+				st.acctRefreshing = true
+				st.acctRefreshErr = ""
+				go loadAccount(ctx, w, acctDone)
 			}
 
 			layoutUI(gtx, th, &st)
@@ -823,16 +843,38 @@ func accountInfoRows(th *material.Theme, st *state, pal palette) []layout.FlexCh
 	}
 	children := []layout.FlexChild{
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			lbl := material.Label(th, unit.Sp(14), expText)
-			lbl.Color = pal.fg
-			return lbl.Layout(gtx)
+			return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					rows := []layout.FlexChild{
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							lbl := material.Label(th, unit.Sp(14), expText)
+							lbl.Color = pal.fg
+							return lbl.Layout(gtx)
+						}),
+					}
+					if cfg.DeviceName != "" {
+						rows = append(rows,
+							layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								lbl := material.Label(th, unit.Sp(13), "device  "+cfg.DeviceName)
+								lbl.Color = pal.muted
+								return lbl.Layout(gtx)
+							}),
+						)
+					}
+					return layout.Flex{Axis: layout.Vertical}.Layout(gtx, rows...)
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return refreshGlyph(gtx, th, &st.acctRefresh, st.acctRefreshing, pal)
+				}),
+			)
 		}),
 	}
-	if cfg.DeviceName != "" {
+	if st.acctRefreshErr != "" {
 		children = append(children,
 			layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				lbl := material.Label(th, unit.Sp(13), "device  "+cfg.DeviceName)
+				lbl := material.Label(th, unit.Sp(12), st.acctRefreshErr)
 				lbl.Color = pal.muted
 				return lbl.Layout(gtx)
 			}),
@@ -977,7 +1019,7 @@ func filterRow(gtx layout.Context, th *material.Theme, st *state, pal palette) l
 		}),
 		layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return refreshGlyph(gtx, th, st, pal)
+			return refreshGlyph(gtx, th, &st.refresh, st.relayLoading, pal)
 		}),
 	)
 }
@@ -1010,10 +1052,10 @@ func filterEditor(gtx layout.Context, th *material.Theme, ed *widget.Editor, pal
 	)
 }
 
-func refreshGlyph(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
-	return st.refresh.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+func refreshGlyph(gtx layout.Context, th *material.Theme, click *widget.Clickable, loading bool, pal palette) layout.Dimensions {
+	return click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		c := pal.fg
-		if st.relayLoading {
+		if loading {
 			c = pal.muted
 		}
 		sz := gtx.Dp(24)
@@ -1432,6 +1474,53 @@ func loadRelaysNow(ctx context.Context, refresh bool) relayLoadResult {
 		_ = cfg.Save()
 	}
 	return res
+}
+
+type acctLoadResult struct {
+	err error
+}
+
+func loadAccount(ctx context.Context, w *app.Window, done chan<- acctLoadResult) {
+	res := loadAccountNow(ctx)
+	select {
+	case done <- res:
+	case <-ctx.Done():
+	}
+	w.Invalidate()
+}
+
+func loadAccountNow(ctx context.Context) acctLoadResult {
+	cfg, err := config.Load()
+	if err != nil {
+		return acctLoadResult{err: err}
+	}
+	if cfg == nil || cfg.AccountToken == "" {
+		return acctLoadResult{err: errors.New("not logged in")}
+	}
+	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	c := mullvad.New()
+	exp, err := c.AccountExpiry(cctx, cfg.AccountToken)
+	if err != nil {
+		return acctLoadResult{err: err}
+	}
+	cfg.AccountExpiry = exp
+	if cfg.DeviceID != "" {
+		devs, err := c.ListDevices(cctx, cfg.AccountToken)
+		if err != nil {
+			return acctLoadResult{err: err}
+		}
+		for _, d := range devs {
+			if d.ID == cfg.DeviceID {
+				cfg.DeviceName = d.Name
+				break
+			}
+		}
+	}
+	if err := cfg.Save(); err != nil {
+		return acctLoadResult{err: err}
+	}
+	return acctLoadResult{}
 }
 
 type splitLoadResult struct {
