@@ -94,9 +94,10 @@ type state struct {
 	relayLoadErr string
 	relayLoading bool
 
-	btn     widget.Clickable
-	refresh widget.Clickable
-	toggle  widget.Clickable
+	btn       widget.Clickable
+	reconnect widget.Clickable
+	refresh   widget.Clickable
+	toggle    widget.Clickable
 
 	headerClicks map[string]*widget.Clickable
 	rowClicks    map[string]*widget.Clickable
@@ -414,6 +415,17 @@ func run(w *app.Window) error {
 					go runCmd(ctx, w, cmdDone, args...)
 				}
 			}
+			if !st.running && st.reconnect.Clicked(gtx) && st.cfg.LastRelay != "" {
+				st.cmdErr = nil
+				st.cmdOut = ""
+				st.running = true
+				st.runningName = "reconnect"
+				args := []string{"reconnect"}
+				if st.allowLAN.Value {
+					args = append(args, "--allow-lan")
+				}
+				go runCmd(ctx, w, cmdDone, args...)
+			}
 			if !st.running && st.loginBtn.Clicked(gtx) {
 				token := strings.TrimSpace(st.loginToken.Text())
 				if token == "" {
@@ -589,6 +601,9 @@ func connectedBody(gtx layout.Context, th *material.Theme, st *state, pal palett
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return actionButton(gtx, th, &st.btn, pal, "Disconnect", st.running, st.runningName == "disconnect")
 		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return reconnectLink(gtx, th, st, pal)
+		}),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			return layout.Dimensions{Size: gtx.Constraints.Min}
 		}),
@@ -634,6 +649,9 @@ func disconnectedBody(gtx layout.Context, th *material.Theme, st *state, pal pal
 		layout.Rigid(layout.Spacer{Height: unit.Dp(28)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return actionButton(gtx, th, &st.btn, pal, "Connect", btnDisabled, st.runningName == "connect")
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return reconnectLink(gtx, th, st, pal)
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return footer(gtx, th, st, pal)
@@ -1129,6 +1147,28 @@ func relayRow(gtx layout.Context, th *material.Theme, st *state, pal palette, r 
 				return layout.Dimensions{Size: sz}
 			}),
 		)
+	})
+}
+
+func reconnectLink(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
+	if st.cfg.LastRelay == "" {
+		return layout.Dimensions{}
+	}
+	if st.running {
+		gtx = gtx.Disabled()
+	}
+	label := "Reconnect to " + st.cfg.LastRelay
+	if st.runningName == "reconnect" {
+		label += "…"
+	}
+	return layout.Inset{Top: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return st.reconnect.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Label(th, unit.Sp(13), label)
+				lbl.Color = pal.fg
+				return lbl.Layout(gtx)
+			})
+		})
 	})
 }
 
