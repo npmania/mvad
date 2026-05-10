@@ -126,6 +126,7 @@ type state struct {
 	runningName string
 	loadedAny   bool
 	dark        bool
+	txActive    bool
 
 	cfg *config.Config
 
@@ -389,6 +390,7 @@ func main() {
 					}
 				case r := <-pollsWin:
 					if r.err == nil {
+						st.txActive = r.snap.TxBytes != st.snap.TxBytes || r.snap.RxBytes != st.snap.RxBytes
 						st.snap = r.snap
 					}
 					if st.runningName != "lockdown" {
@@ -454,6 +456,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 			if r.err != nil {
 				st.pollErr = r.err
 			} else {
+				st.txActive = r.snap.TxBytes != st.snap.TxBytes || r.snap.RxBytes != st.snap.RxBytes
 				st.snap = r.snap
 				st.pollErr = nil
 			}
@@ -1056,9 +1059,13 @@ func connectedBody(gtx layout.Context, th *material.Theme, st *state, pal palett
 			}
 			children := make([]layout.FlexChild, 0, len(lines))
 			for _, line := range lines {
+				c := pal.muted
+				if st.txActive && strings.Contains(line, "↑") {
+					c = pal.accent
+				}
 				children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					lbl := material.Label(th, unit.Sp(13), line)
-					lbl.Color = pal.muted
+					lbl.Color = c
 					return lbl.Layout(gtx)
 				}))
 			}
