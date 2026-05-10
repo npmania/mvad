@@ -58,16 +58,20 @@ var buildID = func() string {
 			dirty = s.Value == "true"
 		}
 	}
-	if rev == "" {
-		return ""
-	}
 	if len(rev) > 7 {
 		rev = rev[:7]
 	}
 	if dirty {
 		rev += "+"
 	}
-	return rev
+	v := bi.Main.Version
+	if v == "" || v == "(devel)" {
+		return rev
+	}
+	if rev == "" {
+		return v
+	}
+	return v + " " + rev
 }()
 
 type palette struct {
