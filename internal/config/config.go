@@ -25,6 +25,7 @@ type Config struct {
 	LastEndpoint      netip.AddrPort  `json:"last_endpoint,omitzero"`
 	LastTransport     string          `json:"last_transport,omitempty"`
 	LastTransportPort uint16          `json:"last_transport_port,omitempty"`
+	LastBridge        string          `json:"last_bridge,omitempty"`
 	RelayCache        json.RawMessage `json:"relay_cache,omitempty"`
 	RelaysFetchedAt   time.Time       `json:"relays_fetched_at,omitzero"`
 }

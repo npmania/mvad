@@ -1,0 +1,37 @@
+{
+  "locations": {
+    "se-sto": {"country": "Sweden", "city": "Stockholm"},
+    "us-nyc": {"country": "USA", "city": "New York, NY"}
+  },
+  "wireguard": {"relays": [], "port_ranges": []},
+  "openvpn": {"relays": [], "ports": []},
+  "bridge": {
+    "relays": [
+      {
+        "hostname": "se-sto-br-001",
+        "location": "se-sto",
+        "active": true,
+        "owned": true,
+        "provider": "31173",
+        "ipv4_addr_in": "185.213.154.99",
+        "include_in_country": true,
+        "weight": 100
+      },
+      {
+        "hostname": "us-nyc-br-101",
+        "location": "us-nyc",
+        "active": false,
+        "owned": false,
+        "provider": "M247",
+        "ipv4_addr_in": "146.70.141.155",
+        "include_in_country": true,
+        "weight": 100
+      }
+    ],
+    "shadowsocks": [
+      {"protocol": "tcp", "port": 443, "cipher": "aes-256-gcm", "password": "mullvad"},
+      {"protocol": "udp", "port": 1234, "cipher": "aes-256-cfb", "password": "mullvad"},
+      {"protocol": "udp", "port": 1236, "cipher": "aes-256-gcm", "password": "mullvad"}
+    ]
+  }
+}

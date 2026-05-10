@@ -86,6 +86,36 @@ func TestRelays(t *testing.T) {
 	}
 }
 
+func TestBridges(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" || r.URL.Path != "/app/v1/relays" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		w.Write(fixture(t, "bridges.json"))
+	}))
+	bs, ss, err := c.Bridges(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ss.Port != 1236 || ss.Cipher != "aes-256-gcm" || ss.Password != "mullvad" {
+		t.Errorf("ss = %+v", ss)
+	}
+	if len(bs) != 2 {
+		t.Fatalf("got %d bridges, want 2", len(bs))
+	}
+	se := bs[0]
+	if se.Hostname != "se-sto-br-001" || se.Country != "Sweden" || se.City != "Stockholm" {
+		t.Errorf("bridge[0] = %+v", se)
+	}
+	if !se.Active || !se.Owned || se.Provider != "31173" || se.IPv4.String() != "185.213.154.99" {
+		t.Errorf("bridge[0] flags = %+v", se)
+	}
+	us := bs[1]
+	if us.Hostname != "us-nyc-br-101" || us.Active || us.Owned {
+		t.Errorf("bridge[1] = %+v", us)
+	}
+}
+
 func TestAccountExpiry(t *testing.T) {
 	var tokenCalls atomic.Int32
 	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

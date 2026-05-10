@@ -64,6 +64,22 @@ type Relay struct {
 	MultihopPort uint16
 }
 
+type Bridge struct {
+	Hostname string
+	Country  string
+	City     string
+	IPv4     netip.Addr
+	Provider string
+	Owned    bool
+	Active   bool
+}
+
+type ShadowsocksEndpoint struct {
+	Port     uint16
+	Cipher   string
+	Password string
+}
+
 type Device struct {
 	ID        string
 	Name      string
@@ -141,6 +157,68 @@ func (c *Client) Relays(ctx context.Context) ([]Relay, error) {
 		})
 	}
 	return out, nil
+}
+
+// Bridges fetches Shadowsocks bridges and the UDP/aes-256-gcm endpoint
+// the Mullvad app uses (talpid tunnel-obfuscation/shadowsocks).
+func (c *Client) Bridges(ctx context.Context) ([]Bridge, ShadowsocksEndpoint, error) {
+	var raw struct {
+		Locations map[string]struct {
+			Country string `json:"country"`
+			City    string `json:"city"`
+		} `json:"locations"`
+		Bridge struct {
+			Relays []struct {
+				Hostname   string `json:"hostname"`
+				Location   string `json:"location"`
+				Active     bool   `json:"active"`
+				Owned      bool   `json:"owned"`
+				Provider   string `json:"provider"`
+				IPv4AddrIn string `json:"ipv4_addr_in"`
+			} `json:"relays"`
+			Shadowsocks []struct {
+				Protocol string `json:"protocol"`
+				Port     uint16 `json:"port"`
+				Cipher   string `json:"cipher"`
+				Password string `json:"password"`
+			} `json:"shadowsocks"`
+		} `json:"bridge"`
+	}
+	req, err := c.newRequest(ctx, "GET", "/app/v1/relays", nil)
+	if err != nil {
+		return nil, ShadowsocksEndpoint{}, err
+	}
+	if err := c.do(req, &raw); err != nil {
+		return nil, ShadowsocksEndpoint{}, err
+	}
+	var ss ShadowsocksEndpoint
+	for _, s := range raw.Bridge.Shadowsocks {
+		if s.Protocol == "udp" && s.Cipher == "aes-256-gcm" {
+			ss = ShadowsocksEndpoint{Port: s.Port, Cipher: s.Cipher, Password: s.Password}
+			break
+		}
+	}
+	if ss.Port == 0 {
+		return nil, ShadowsocksEndpoint{}, errors.New("mullvad: no udp/aes-256-gcm shadowsocks endpoint")
+	}
+	out := make([]Bridge, 0, len(raw.Bridge.Relays))
+	for _, r := range raw.Bridge.Relays {
+		ip, err := netip.ParseAddr(r.IPv4AddrIn)
+		if err != nil {
+			return nil, ShadowsocksEndpoint{}, fmt.Errorf("mullvad: bridge %s: %w", r.Hostname, err)
+		}
+		loc := raw.Locations[r.Location]
+		out = append(out, Bridge{
+			Hostname: r.Hostname,
+			Country:  loc.Country,
+			City:     loc.City,
+			IPv4:     ip,
+			Provider: r.Provider,
+			Owned:    r.Owned,
+			Active:   r.Active,
+		})
+	}
+	return out, ss, nil
 }
 
 func (c *Client) AccountExpiry(ctx context.Context, account string) (time.Time, error) {

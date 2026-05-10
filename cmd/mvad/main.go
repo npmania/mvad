@@ -34,10 +34,12 @@ import (
 )
 
 const (
-	ifname           = "mvad-wg0"
-	wireguardPort    = 51820
-	udp2tcpLocalPort = 21820
-	udp2tcpPidFile   = "/run/mvad/udp2tcp.pid"
+	ifname               = "mvad-wg0"
+	wireguardPort        = 51820
+	udp2tcpLocalPort     = 21820
+	udp2tcpPidFile       = "/run/mvad/udp2tcp.pid"
+	shadowsocksLocalPort = 21822
+	shadowsocksPidFile   = "/run/mvad/shadowsocks.pid"
 )
 
 var udp2tcpPorts = map[uint16]bool{80: true, 443: true, 5001: true}
@@ -375,8 +377,9 @@ func listRelays(args []string) error {
 	fs.Var(&provider, "provider", "filter by provider (repeatable)")
 	owned := fs.String("owned", "", "filter by owned: true or false")
 	protocol := fs.String("protocol", "", "filter by protocol: wireguard")
+	bridges := fs.Bool("bridges", false, "list shadowsocks bridges instead of wireguard relays")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
-		return usagef("usage: mvad relays [--country C]... [--city C]... [--provider P]... [--owned true|false] [--protocol wireguard]")
+		return usagef("usage: mvad relays [--bridges] [--country C]... [--city C]... [--provider P]... [--owned true|false] [--protocol wireguard]")
 	}
 	var wantOwned, filterOwned bool
 	switch *owned {
@@ -390,6 +393,29 @@ func listRelays(args []string) error {
 	}
 	if *protocol != "" && !strings.EqualFold(*protocol, "wireguard") {
 		return usagef("--protocol: only wireguard is supported")
+	}
+	if *bridges {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		bs, _, err := mullvad.New().Bridges(ctx)
+		if err != nil {
+			return err
+		}
+		sort.Slice(bs, func(i, j int) bool { return bs[i].Hostname < bs[j].Hostname })
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		for _, b := range bs {
+			if !b.Active {
+				continue
+			}
+			if !matchesAny(country, b.Country) || !matchesAny(city, b.City) || !matchesAny(provider, b.Provider) {
+				continue
+			}
+			if filterOwned && b.Owned != wantOwned {
+				continue
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", b.Hostname, b.Country, b.City, b.IPv4, b.Provider)
+		}
+		return w.Flush()
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -422,13 +448,7 @@ func listRelays(args []string) error {
 		if !r.Active {
 			continue
 		}
-		if !matchesAny(country, r.Country) {
-			continue
-		}
-		if !matchesAny(city, r.City) {
-			continue
-		}
-		if !matchesAny(provider, r.Provider) {
+		if !matchesAny(country, r.Country) || !matchesAny(city, r.City) || !matchesAny(provider, r.Provider) {
 			continue
 		}
 		if filterOwned && r.Owned != wantOwned {
@@ -439,6 +459,15 @@ func listRelays(args []string) error {
 	return w.Flush()
 }
 
+func pickBridge(bs []mullvad.Bridge, name string) (mullvad.Bridge, error) {
+	for _, b := range bs {
+		if b.Hostname == name {
+			return b, nil
+		}
+	}
+	return mullvad.Bridge{}, fmt.Errorf("bridge %q not found", name)
+}
+
 func connect(args []string) error {
 	if os.Geteuid() != 0 {
 		return errors.New("this command needs root; rerun with sudo")
@@ -447,24 +476,33 @@ func connect(args []string) error {
 	fs.SetOutput(io.Discard)
 	allowLAN := fs.Bool("allow-lan", false, "allow traffic to private LAN ranges")
 	via := fs.String("via", "", "entry relay for multihop")
-	transport := fs.String("transport", "wireguard", "transport: wireguard or tcp")
+	transport := fs.String("transport", "wireguard", "transport: wireguard, tcp, or shadowsocks")
 	tcpPort := fs.Uint("port", 5001, "udp2tcp gateway TCP port (80, 443, or 5001)")
+	bridge := fs.String("bridge", "", "shadowsocks bridge hostname")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 1 {
-		return usagef("usage: mvad connect [--allow-lan] [--via <entry>] [--transport wireguard|tcp [--port 80|443|5001]] <relay>")
+		return usagef("usage: mvad connect [--allow-lan] [--via <entry>] [--transport wireguard|tcp|shadowsocks [--port 80|443|5001] [--bridge <host>]] <relay>")
 	}
-	useTCP := false
+	useTCP, useSS := false, false
 	switch *transport {
 	case "wireguard":
 	case "tcp":
 		useTCP = true
+	case "shadowsocks":
+		useSS = true
 	default:
-		return usagef("--transport: must be wireguard or tcp")
+		return usagef("--transport: must be wireguard, tcp, or shadowsocks")
 	}
 	if useTCP && !udp2tcpPorts[uint16(*tcpPort)] {
 		return usagef("--port: must be 80, 443, or 5001")
 	}
-	if useTCP && *via != "" {
-		return usagef("--transport tcp does not support --via")
+	if (useTCP || useSS) && *via != "" {
+		return usagef("--transport %s does not support --via", *transport)
+	}
+	if useSS && *bridge == "" {
+		return usagef("--transport shadowsocks requires --bridge <host>")
+	}
+	if !useSS && *bridge != "" {
+		return usagef("--bridge requires --transport shadowsocks")
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -475,6 +513,11 @@ func connect(args []string) error {
 	}
 	if !cfg.DeviceIPv4.IsValid() {
 		return errors.New("device address missing; run mvad login <token>")
+	}
+	if useSS {
+		if _, err := exec.LookPath("ss-local"); err != nil {
+			return errors.New("ss-local not found — install shadowsocks-libev")
+		}
 	}
 	priv, err := wgtypes.ParseKey(cfg.PrivateKey)
 	if err != nil {
@@ -500,18 +543,42 @@ func connect(args []string) error {
 	if useTCP {
 		endpoint = netip.AddrPortFrom(exit.IPv4, uint16(*tcpPort))
 	}
+	var ssBridge mullvad.Bridge
+	var ssEnd mullvad.ShadowsocksEndpoint
+	if useSS {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		bridges, ss, err := mullvad.New().Bridges(ctx)
+		if err != nil {
+			return err
+		}
+		ssBridge, err = pickBridge(bridges, *bridge)
+		if err != nil {
+			return err
+		}
+		ssEnd = ss
+		endpoint = netip.AddrPortFrom(ssBridge.IPv4, ss.Port)
+	}
 	wgEndpoint := endpoint
 	if useTCP {
 		wgEndpoint = netip.AddrPortFrom(netip.AddrFrom4([4]byte{127, 0, 0, 1}), udp2tcpLocalPort)
+	}
+	if useSS {
+		wgEndpoint = netip.AddrPortFrom(netip.AddrFrom4([4]byte{127, 0, 0, 1}), shadowsocksLocalPort)
 	}
 	cfg.LastRelay = exit.Hostname
 	cfg.LastEntryRelay = entryHost
 	cfg.LastEndpoint = endpoint
 	cfg.LastTransport = ""
 	cfg.LastTransportPort = 0
+	cfg.LastBridge = ""
 	if useTCP {
 		cfg.LastTransport = "tcp"
 		cfg.LastTransportPort = uint16(*tcpPort)
+	}
+	if useSS {
+		cfg.LastTransport = "shadowsocks"
+		cfg.LastBridge = ssBridge.Hostname
 	}
 	if err := cfg.Save(); err != nil {
 		return err
@@ -560,6 +627,16 @@ func connect(args []string) error {
 			return err
 		}
 	}
+	if useSS {
+		wgPeer := netip.AddrPortFrom(exit.IPv4, wireguardPort)
+		if err := ssStart(shadowsocksLocalPort, ssBridge.IPv4, ssEnd, wgPeer); err != nil {
+			firewall.Down()
+			dns.Restore(ifname)
+			route.Unset(ifname, endpoint.Addr())
+			wg.Down(ifname)
+			return err
+		}
+	}
 	return nil
 }
 
@@ -590,6 +667,9 @@ func reconnect(args []string) error {
 	if cfg.LastTransport == "tcp" {
 		cargs = append(cargs, "--transport", "tcp", "--port", strconv.Itoa(int(cfg.LastTransportPort)))
 	}
+	if cfg.LastTransport == "shadowsocks" {
+		cargs = append(cargs, "--transport", "shadowsocks", "--bridge", cfg.LastBridge)
+	}
 	cargs = append(cargs, cfg.LastRelay)
 	if err := disconnect(nil); err != nil {
 		return err
@@ -608,7 +688,7 @@ func disconnect(args []string) error {
 	if cfg, err := config.Load(); err == nil {
 		endpoint = cfg.LastEndpoint.Addr()
 	}
-	return errors.Join(udp2tcpStop(), firewall.Down(), dns.Restore(ifname), route.Unset(ifname, endpoint), wg.Down(ifname))
+	return errors.Join(ssStop(), udp2tcpStop(), firewall.Down(), dns.Restore(ifname), route.Unset(ifname, endpoint), wg.Down(ifname))
 }
 
 func showStatus(args []string) error {
@@ -707,6 +787,67 @@ func udp2tcpShimAlive(pid int) bool {
 		return false
 	}
 	return strings.Contains(string(data), "__udp2tcp")
+}
+
+func ssStart(localPort int, bridge netip.Addr, ss mullvad.ShadowsocksEndpoint, peer netip.AddrPort) error {
+	bin, err := exec.LookPath("ss-local")
+	if err != nil {
+		return errors.New("ss-local not found — install shadowsocks-libev")
+	}
+	if err := os.MkdirAll(filepath.Dir(shadowsocksPidFile), 0700); err != nil {
+		return err
+	}
+	cmd := exec.Command(bin,
+		"-U",
+		"-b", "127.0.0.1",
+		"-l", strconv.Itoa(localPort),
+		"-L", peer.String(),
+		"-s", bridge.String(),
+		"-p", strconv.Itoa(int(ss.Port)),
+		"-m", ss.Cipher,
+		"-k", ss.Password,
+	)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	pid := []byte(strconv.Itoa(cmd.Process.Pid) + "\n")
+	if err := os.WriteFile(shadowsocksPidFile, pid, 0600); err != nil {
+		cmd.Process.Kill()
+		return err
+	}
+	go cmd.Wait()
+	return nil
+}
+
+func ssStop() error {
+	data, err := os.ReadFile(shadowsocksPidFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		os.Remove(shadowsocksPidFile)
+		return fmt.Errorf("shadowsocks pidfile: %w", err)
+	}
+	if ssAlive(pid) {
+		p, _ := os.FindProcess(pid)
+		_ = p.Signal(syscall.SIGTERM)
+	}
+	return os.Remove(shadowsocksPidFile)
+}
+
+// ssAlive reports whether pid still runs ss-local, guarding against
+// PID recycling. /proc/<pid>/exe is kernel-set; cmdline is not.
+func ssAlive(pid int) bool {
+	target, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
+	if err != nil {
+		return false
+	}
+	return filepath.Base(target) == "ss-local"
 }
 
 func pickRelay(cfg *config.Config, name string) (mullvad.Relay, error) {
