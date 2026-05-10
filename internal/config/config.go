@@ -45,13 +45,13 @@ func path() (string, error) {
 	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
 		return filepath.Join(dir, "mvad", "config.json"), nil
 	}
-	su, err := ResolveSudoUser()
+	cu, err := ResolveCallingUser()
 	if err != nil {
 		return "", err
 	}
 	home := ""
-	if su != nil {
-		home = su.Home
+	if cu != nil {
+		home = cu.Home
 	} else {
 		home, err = os.UserHomeDir()
 		if err != nil {
@@ -61,14 +61,29 @@ func path() (string, error) {
 	return filepath.Join(home, ".config", "mvad", "config.json"), nil
 }
 
-type SudoUser struct {
+type CallingUser struct {
 	Home     string
 	UID, GID int
 }
 
-func ResolveSudoUser() (*SudoUser, error) {
+func ResolveCallingUser() (*CallingUser, error) {
 	if os.Geteuid() != 0 {
 		return nil, nil
+	}
+	if uid := os.Getenv("PKEXEC_UID"); uid != "" {
+		n, err := strconv.Atoi(uid)
+		if err != nil {
+			return nil, err
+		}
+		u, err := user.LookupId(uid)
+		if err != nil {
+			return nil, err
+		}
+		gid, err := strconv.Atoi(u.Gid)
+		if err != nil {
+			return nil, err
+		}
+		return &CallingUser{Home: u.HomeDir, UID: n, GID: gid}, nil
 	}
 	name := os.Getenv("SUDO_USER")
 	if name == "" {
@@ -86,7 +101,7 @@ func ResolveSudoUser() (*SudoUser, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &SudoUser{Home: u.HomeDir, UID: uid, GID: gid}, nil
+	return &CallingUser{Home: u.HomeDir, UID: uid, GID: gid}, nil
 }
 
 func Load() (*Config, error) {
@@ -108,7 +123,7 @@ func Load() (*Config, error) {
 	return c, nil
 }
 
-func mkdirChown(dir string, mode os.FileMode, su *SudoUser) error {
+func mkdirChown(dir string, mode os.FileMode, cu *CallingUser) error {
 	var toMake []string
 	cur := dir
 	for {
@@ -128,8 +143,8 @@ func mkdirChown(dir string, mode os.FileMode, su *SudoUser) error {
 		if err := os.Mkdir(toMake[i], mode); err != nil {
 			return err
 		}
-		if su != nil {
-			if err := os.Chown(toMake[i], su.UID, su.GID); err != nil {
+		if cu != nil {
+			if err := os.Chown(toMake[i], cu.UID, cu.GID); err != nil {
 				return err
 			}
 		}
@@ -142,12 +157,12 @@ func (c *Config) Save() error {
 	if err != nil {
 		return err
 	}
-	su, err := ResolveSudoUser()
+	cu, err := ResolveCallingUser()
 	if err != nil {
 		return err
 	}
 	dir := filepath.Dir(p)
-	if err := mkdirChown(dir, 0700, su); err != nil {
+	if err := mkdirChown(dir, 0700, cu); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(c, "", "\t")
@@ -168,8 +183,8 @@ func (c *Config) Save() error {
 		os.Remove(name)
 		return err
 	}
-	if su != nil {
-		if err := os.Chown(name, su.UID, su.GID); err != nil {
+	if cu != nil {
+		if err := os.Chown(name, cu.UID, cu.GID); err != nil {
 			os.Remove(name)
 			return err
 		}

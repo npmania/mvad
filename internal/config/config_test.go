@@ -149,6 +149,35 @@ func TestPathSudoUserRedirectsToInvokerHome(t *testing.T) {
 	}
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", "/root")
+	t.Setenv("PKEXEC_UID", "")
+	p, err := path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(u.HomeDir, ".config", "mvad", "config.json"); p != want {
+		t.Errorf("Path = %q, want %q", p, want)
+	}
+}
+
+func TestPathPkexecUIDRedirectsToInvokerHome(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root")
+	}
+	uid := os.Getenv("PKEXEC_UID")
+	if uid == "" {
+		uid = os.Getenv("SUDO_UID")
+	}
+	if uid == "" {
+		t.Skip("no invoker UID available")
+	}
+	u, err := user.LookupId(uid)
+	if err != nil {
+		t.Fatalf("user.LookupId(%q): %v", uid, err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "/root")
+	t.Setenv("SUDO_USER", "")
+	t.Setenv("PKEXEC_UID", uid)
 	p, err := path()
 	if err != nil {
 		t.Fatal(err)
@@ -166,6 +195,7 @@ func TestPathIgnoresSudoUserWhenNotRoot(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", home)
 	t.Setenv("SUDO_USER", "nonexistent-user")
+	t.Setenv("PKEXEC_UID", "999999")
 	p, err := path()
 	if err != nil {
 		t.Fatal(err)

@@ -20,7 +20,7 @@ func Send(title, body string) error {
 		return nil
 	}
 
-	su, err := config.ResolveSudoUser()
+	cu, err := config.ResolveCallingUser()
 	if err != nil {
 		return err
 	}
@@ -28,8 +28,8 @@ func Send(title, body string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if su != nil {
-		runtimeDir := fmt.Sprintf("/run/user/%d", su.UID)
+	if cu != nil {
+		runtimeDir := fmt.Sprintf("/run/user/%d", cu.UID)
 		sock := filepath.Join(runtimeDir, "bus")
 		if _, err := os.Stat(sock); err != nil {
 			return nil
@@ -37,14 +37,14 @@ func Send(title, body string) error {
 		cmd := exec.CommandContext(ctx, bin, "-a", "mvad", title, body)
 		cmd.SysProcAttr = &syscall.SysProcAttr{
 			Credential: &syscall.Credential{
-				Uid: uint32(su.UID),
-				Gid: uint32(su.GID),
+				Uid: uint32(cu.UID),
+				Gid: uint32(cu.GID),
 			},
 		}
 		cmd.Env = []string{
 			"DBUS_SESSION_BUS_ADDRESS=unix:path=" + sock,
 			"XDG_RUNTIME_DIR=" + runtimeDir,
-			"HOME=" + su.Home,
+			"HOME=" + cu.Home,
 		}
 		return cmd.Run()
 	}
