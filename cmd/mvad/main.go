@@ -654,11 +654,11 @@ func connect(args []string) (retErr error) {
 	}
 	priv, err := wgtypes.ParseKey(cfg.PrivateKey)
 	if err != nil {
-		return err
+		return fmt.Errorf("parse stored private key: %w (run mvad rotate-key to regenerate)", err)
 	}
 	exit, err := pickRelay(cfg, fs.Arg(0))
 	if err != nil {
-		return err
+		return fmt.Errorf("pick exit relay: %w (run mvad relays --refresh to update the cache)", err)
 	}
 	relay = exit.Hostname
 	endpoint := netip.AddrPortFrom(exit.IPv4, wireguardPort)
@@ -666,7 +666,7 @@ func connect(args []string) (retErr error) {
 	if *via != "" {
 		entry, err := pickRelay(cfg, *via)
 		if err != nil {
-			return err
+			return fmt.Errorf("pick entry relay: %w (run mvad relays --refresh to update the cache)", err)
 		}
 		if exit.MultihopPort == 0 {
 			return fmt.Errorf("relay %q has no multihop port", exit.Hostname)
@@ -684,11 +684,11 @@ func connect(args []string) (retErr error) {
 		defer cancel()
 		bridges, ss, err := mullvad.New().Bridges(ctx)
 		if err != nil {
-			return err
+			return fmt.Errorf("fetch shadowsocks bridges: %w", err)
 		}
 		ssBridge, err = pickBridge(bridges, *bridge)
 		if err != nil {
-			return err
+			return fmt.Errorf("pick bridge: %w", err)
 		}
 		ssEnd = ss
 		endpoint = netip.AddrPortFrom(ssBridge.IPv4, ss.Port)
@@ -715,7 +715,7 @@ func connect(args []string) (retErr error) {
 		cfg.LastBridge = ssBridge.Hostname
 	}
 	if err := cfg.Save(); err != nil {
-		return err
+		return fmt.Errorf("save config: %w", err)
 	}
 	wcfg := wg.Config{
 		Name:       ifname,
@@ -728,16 +728,16 @@ func connect(args []string) (retErr error) {
 		MTU:        1380,
 	}
 	if err := wg.Up(wcfg); err != nil {
-		return err
+		return fmt.Errorf("configure wireguard interface: %w (is the wireguard kernel module loaded?)", err)
 	}
 	if err := route.Set(ifname, endpoint.Addr()); err != nil {
 		wg.Down(ifname)
-		return err
+		return fmt.Errorf("set default route: %w", err)
 	}
 	if err := dns.Set(ifname, mullvadDNS); err != nil {
 		route.Unset(ifname, endpoint.Addr())
 		wg.Down(ifname)
-		return err
+		return fmt.Errorf("configure dns: %w", err)
 	}
 	fcfg := firewall.Config{
 		Iface:    ifname,
@@ -750,7 +750,7 @@ func connect(args []string) (retErr error) {
 		dns.Restore(ifname)
 		route.Unset(ifname, endpoint.Addr())
 		wg.Down(ifname)
-		return err
+		return fmt.Errorf("install nft kill-switch: %w (run nft list ruleset as root to inspect)", err)
 	}
 	if useTCP {
 		if err := udp2tcpStart(udp2tcpLocalPort, endpoint); err != nil {
@@ -758,7 +758,7 @@ func connect(args []string) (retErr error) {
 			dns.Restore(ifname)
 			route.Unset(ifname, endpoint.Addr())
 			wg.Down(ifname)
-			return err
+			return fmt.Errorf("start udp2tcp shim: %w", err)
 		}
 	}
 	if useSS {
@@ -768,7 +768,7 @@ func connect(args []string) (retErr error) {
 			dns.Restore(ifname)
 			route.Unset(ifname, endpoint.Addr())
 			wg.Down(ifname)
-			return err
+			return fmt.Errorf("start ss-local: %w", err)
 		}
 	}
 	return nil
