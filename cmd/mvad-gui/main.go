@@ -156,6 +156,11 @@ type state struct {
 	splitLoading bool
 	splitLoaded  bool
 	runStarting  []string
+
+	favClicks     map[string]*widget.Clickable
+	tr            tray
+	trayLastUp    bool
+	trayLastRelay string
 }
 
 type row struct {
@@ -163,20 +168,28 @@ type row struct {
 	relay   *mullvad.Relay
 }
 
-type trayCmd int
+type trayCmdKind int
 
 const (
-	cmdShow trayCmd = iota
+	cmdShow trayCmdKind = iota
 	cmdConnect
 	cmdSettings
 	cmdAccount
 	cmdSplit
+	cmdConnectFavorite
+	cmdAddFavorite
 	cmdQuit
 	cmdHide
 )
 
+type trayCmd struct {
+	kind  trayCmdKind
+	relay string
+}
+
 type tray interface {
 	shutdown()
+	setMenu(items []menuItem)
 }
 
 var errQuit = errors.New("quit")
@@ -192,7 +205,7 @@ func setWindowState(ch chan bool, s bool) {
 }
 
 func applyTrayCmd(st *state, c trayCmd) {
-	switch c {
+	switch c.kind {
 	case cmdConnect:
 		st.view = viewConnect
 	case cmdSettings:
@@ -217,6 +230,7 @@ func main() {
 	st.rowClicks = map[string]*widget.Clickable{}
 	st.deviceClicks = map[string]*widget.Clickable{}
 	st.deviceArmed = map[string]time.Time{}
+	st.favClicks = map[string]*widget.Clickable{}
 	st.splitList.Axis = layout.Vertical
 	st.addPID.SingleLine = true
 	st.addPID.Submit = true
@@ -256,7 +270,7 @@ func main() {
 	conn, err := dbus.SessionBus()
 	var tr tray
 	if err == nil && sniWatcherOwned(conn) {
-		tr, err = startSNI(ctx, conn, pollsTray, windowState, trayCmds)
+		tr, err = startSNI(ctx, conn, pollsTray, windowState, trayCmds, cfg.Favorites)
 	} else {
 		tr, err = startXEmbed(ctx, pollsTray, windowState, trayCmds)
 	}
@@ -264,6 +278,7 @@ func main() {
 		log.Printf("tray: %v (no SNI watcher and no system tray; running windowed-only)", err)
 		tr = nil
 	}
+	st.tr = tr
 
 	go func() {
 		defer func() {
@@ -298,15 +313,27 @@ func main() {
 			}
 			select {
 			case c := <-trayCmds:
-				switch c {
+				switch c.kind {
 				case cmdQuit:
 					return
 				case cmdHide:
+				case cmdConnectFavorite:
+					if !st.running && c.relay != "" {
+						startConnect(&st, nil, c.relay)
+					}
+					st.view = viewConnect
+					windowed = true
+				case cmdAddFavorite:
+					addFavorite(&st, tr, c.relay)
 				default:
 					applyTrayCmd(&st, c)
 					windowed = true
 				}
-			case <-pollsWin:
+			case r := <-pollsWin:
+				if r.err == nil {
+					st.snap = r.snap
+				}
+				updateTrayMenu(&st, r)
 			case <-ctx.Done():
 				return
 			}
@@ -350,6 +377,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 				st.pollErr = nil
 			}
 			st.loadedAny = true
+			updateTrayMenu(st, r)
 		case r := <-st.cmdDone:
 			if r.name != "xdg-open" {
 				st.running = false
@@ -475,11 +503,18 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 				}
 			}
 		case c := <-trayCmds:
-			switch c {
+			switch c.kind {
 			case cmdHide:
 				w.Perform(system.ActionClose)
 			case cmdQuit:
 				return errQuit
+			case cmdConnectFavorite:
+				if !st.running && c.relay != "" {
+					startConnect(st, w, c.relay)
+				}
+				st.view = viewConnect
+			case cmdAddFavorite:
+				addFavorite(st, st.tr, c.relay)
 			default:
 				applyTrayCmd(st, c)
 			}
@@ -907,7 +942,7 @@ func disconnectedBody(gtx layout.Context, th *material.Theme, st *state, pal pal
 }
 
 func settingsBody(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
-	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+	children := []layout.FlexChild{
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return settingsRow(gtx, th, pal, "Allow LAN", "", &st.allowLAN)
 		}),
@@ -929,6 +964,9 @@ func settingsBody(gtx layout.Context, th *material.Theme, st *state, pal palette
 				return lbl.Layout(gtx)
 			})
 		}),
+	}
+	children = append(children, favoritesSection(th, st, pal)...)
+	children = append(children,
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			return layout.Dimensions{Size: gtx.Constraints.Min}
 		}),
@@ -936,6 +974,61 @@ func settingsBody(gtx layout.Context, th *material.Theme, st *state, pal palette
 			return footer(gtx, th, st, pal)
 		}),
 	)
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+}
+
+func favoritesSection(th *material.Theme, st *state, pal palette) []layout.FlexChild {
+	if len(st.cfg.Favorites) == 0 {
+		return nil
+	}
+	children := []layout.FlexChild{
+		layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return hairline(gtx, pal.dim)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Label(th, unit.Sp(12), "Favorites")
+			lbl.Color = pal.muted
+			return lbl.Layout(gtx)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
+	}
+	for _, fav := range st.cfg.Favorites {
+		f := fav
+		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return favoriteRow(gtx, th, st, pal, f)
+		}))
+	}
+	return children
+}
+
+func favoriteRow(gtx layout.Context, th *material.Theme, st *state, pal palette, fav string) layout.Dimensions {
+	c, ok := st.favClicks[fav]
+	if !ok {
+		c = &widget.Clickable{}
+		st.favClicks[fav] = c
+	}
+	if c.Clicked(gtx) {
+		removeFavorite(st, st.tr, fav)
+	}
+	return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Label(th, unit.Sp(13), fav)
+				lbl.Color = pal.fg
+				return lbl.Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Label(th, unit.Sp(13), "remove")
+					lbl.Color = pal.fg
+					return lbl.Layout(gtx)
+				})
+			}),
+		)
+	})
 }
 
 func settingsRow(gtx layout.Context, th *material.Theme, pal palette, title, sub string, b *widget.Bool) layout.Dimensions {
@@ -1747,7 +1840,63 @@ func runCmd(ctx context.Context, w *app.Window, done chan<- cmdResult, args ...s
 	case done <- cmdResult{name: args[0], out: string(out), err: err}:
 	case <-ctx.Done():
 	}
-	w.Invalidate()
+	if w != nil {
+		w.Invalidate()
+	}
+}
+
+func startConnect(st *state, w *app.Window, relay string) {
+	st.cmdErr = nil
+	st.cmdOut = ""
+	st.running = true
+	st.runningName = "connect"
+	args := []string{"connect"}
+	if st.cfg.AllowLAN {
+		args = append(args, "--allow-lan")
+	}
+	if st.transport == "tcp" {
+		args = append(args, "--transport=tcp")
+	}
+	args = append(args, "--", relay)
+	go runCmd(st.ctx, w, st.cmdDone, args...)
+}
+
+func addFavorite(st *state, tr tray, relay string) {
+	if relay == "" || containsString(st.cfg.Favorites, relay) {
+		return
+	}
+	st.cfg.Favorites = append(st.cfg.Favorites, relay)
+	_ = st.cfg.Save()
+	if tr != nil {
+		tr.setMenu(buildTrayMenu(st.cfg.Favorites, st.snap.Up, st.snap.Relay))
+	}
+}
+
+func removeFavorite(st *state, tr tray, relay string) {
+	for i, f := range st.cfg.Favorites {
+		if f != relay {
+			continue
+		}
+		st.cfg.Favorites = append(st.cfg.Favorites[:i], st.cfg.Favorites[i+1:]...)
+		_ = st.cfg.Save()
+		delete(st.favClicks, relay)
+		if tr != nil {
+			tr.setMenu(buildTrayMenu(st.cfg.Favorites, st.snap.Up, st.snap.Relay))
+		}
+		return
+	}
+}
+
+func updateTrayMenu(st *state, r pollResult) {
+	if st.tr == nil || r.err != nil {
+		return
+	}
+	if r.snap.Up == st.trayLastUp && r.snap.Relay == st.trayLastRelay {
+		return
+	}
+	st.trayLastUp = r.snap.Up
+	st.trayLastRelay = r.snap.Relay
+	st.tr.setMenu(buildTrayMenu(st.cfg.Favorites, r.snap.Up, r.snap.Relay))
 }
 
 func runExternal(ctx context.Context, w *app.Window, done chan<- cmdResult, name string, args ...string) {

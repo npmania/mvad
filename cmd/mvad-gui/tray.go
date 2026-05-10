@@ -55,6 +55,7 @@ type sni struct {
 	mu       sync.Mutex
 	shown    bool
 	revision uint32
+	menu     []menuItem
 }
 
 func sniWatcherOwned(conn *dbus.Conn) bool {
@@ -63,7 +64,7 @@ func sniWatcherOwned(conn *dbus.Conn) bool {
 	return err == nil && has
 }
 
-func startSNI(ctx context.Context, conn *dbus.Conn, polls <-chan pollResult, windowState <-chan bool, cmds chan<- trayCmd) (*sni, error) {
+func startSNI(ctx context.Context, conn *dbus.Conn, polls <-chan pollResult, windowState <-chan bool, cmds chan<- trayCmd, favorites []string) (*sni, error) {
 	busName := "org.kde.StatusNotifierItem-" + strconv.Itoa(os.Getpid()) + "-1"
 	reply, err := conn.RequestName(busName, dbus.NameFlagDoNotQueue)
 	if err != nil {
@@ -73,7 +74,8 @@ func startSNI(ctx context.Context, conn *dbus.Conn, polls <-chan pollResult, win
 		return nil, fmt.Errorf("dbus: bus name %s not primary (%v)", busName, reply)
 	}
 
-	t := &sni{conn: conn, busName: busName, cmds: cmds}
+	t := &sni{conn: conn, busName: busName, cmds: cmds, revision: 1}
+	t.menu = buildTrayMenu(favorites, false, "")
 
 	if err := conn.Export(sniHandler{t}, sniPath, sniIface); err != nil {
 		t.shutdown()
@@ -156,9 +158,10 @@ func (t *sni) loop(ctx context.Context, polls <-chan pollResult, windowState <-c
 				continue
 			}
 			t.shown = s
-			t.mu.Unlock()
 			t.revision++
-			_ = t.conn.Emit(menuPath, menuIface+".LayoutUpdated", t.revision, int32(0))
+			rev := t.revision
+			t.mu.Unlock()
+			_ = t.conn.Emit(menuPath, menuIface+".LayoutUpdated", rev, int32(0))
 		}
 	}
 }
@@ -175,6 +178,15 @@ func (t *sni) refresh(up bool) {
 	t.props.SetMust(sniIface, "ToolTip", toolTip{Title: "mvad", Body: body})
 	_ = t.conn.Emit(sniPath, sniIface+".NewIcon")
 	_ = t.conn.Emit(sniPath, sniIface+".NewToolTip")
+}
+
+func (t *sni) setMenu(items []menuItem) {
+	t.mu.Lock()
+	t.menu = items
+	t.revision++
+	rev := t.revision
+	t.mu.Unlock()
+	_ = t.conn.Emit(menuPath, menuIface+".LayoutUpdated", rev, int32(0))
 }
 
 func (t *sni) shutdown() {
@@ -194,12 +206,12 @@ func (t *sni) shutdown() {
 type sniHandler struct{ t *sni }
 
 func (s sniHandler) Activate(x, y int32) *dbus.Error {
-	s.send(cmdShow)
+	s.send(trayCmd{kind: cmdShow})
 	return nil
 }
 
 func (s sniHandler) SecondaryActivate(x, y int32) *dbus.Error {
-	s.send(cmdShow)
+	s.send(trayCmd{kind: cmdShow})
 	return nil
 }
 
@@ -219,21 +231,78 @@ func (s sniHandler) send(c trayCmd) {
 }
 
 type menuItem struct {
-	id    int32
-	label string
-	sep   bool
-	cmd   trayCmd
+	id       int32
+	label    string
+	sep      bool
+	cmd      trayCmd
+	children []menuItem
 }
 
-var menuItems = []menuItem{
-	{1, "Show", false, cmdShow},
-	{2, "", true, 0},
-	{3, "Connect", false, cmdConnect},
-	{4, "Settings", false, cmdSettings},
-	{5, "Account", false, cmdAccount},
-	{6, "Split", false, cmdSplit},
-	{7, "", true, 0},
-	{8, "Quit", false, cmdQuit},
+func buildTrayMenu(favorites []string, up bool, relay string) []menuItem {
+	items := []menuItem{
+		{id: 1, label: "Show", cmd: trayCmd{kind: cmdShow}},
+		{id: 2, sep: true},
+	}
+	extras := false
+	if len(favorites) > 0 {
+		children := make([]menuItem, 0, len(favorites))
+		for i, h := range favorites {
+			children = append(children, menuItem{
+				id:    1000 + int32(i),
+				label: h,
+				cmd:   trayCmd{kind: cmdConnectFavorite, relay: h},
+			})
+		}
+		items = append(items, menuItem{
+			id:       99,
+			label:    "Connect to favorite",
+			children: children,
+		})
+		extras = true
+	}
+	if up && relay != "" && !containsString(favorites, relay) {
+		items = append(items, menuItem{
+			id:    200,
+			label: "Add current to favorites",
+			cmd:   trayCmd{kind: cmdAddFavorite, relay: relay},
+		})
+		extras = true
+	}
+	if extras {
+		items = append(items, menuItem{id: 201, sep: true})
+	}
+	items = append(items,
+		menuItem{id: 3, label: "Connect", cmd: trayCmd{kind: cmdConnect}},
+		menuItem{id: 4, label: "Settings", cmd: trayCmd{kind: cmdSettings}},
+		menuItem{id: 5, label: "Account", cmd: trayCmd{kind: cmdAccount}},
+		menuItem{id: 6, label: "Split", cmd: trayCmd{kind: cmdSplit}},
+		menuItem{id: 7, sep: true},
+		menuItem{id: 8, label: "Quit", cmd: trayCmd{kind: cmdQuit}},
+	)
+	return items
+}
+
+func containsString(xs []string, s string) bool {
+	for _, x := range xs {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+func findByID(items []menuItem, id int32) (menuItem, bool) {
+	for _, it := range items {
+		if it.id == id {
+			return it, true
+		}
+		if len(it.children) > 0 {
+			if c, ok := findByID(it.children, id); ok {
+				return c, true
+			}
+		}
+	}
+	return menuItem{}, false
 }
 
 func (t *sni) showHide() (string, trayCmd) {
@@ -241,9 +310,9 @@ func (t *sni) showHide() (string, trayCmd) {
 	s := t.shown
 	t.mu.Unlock()
 	if s {
-		return "Hide", cmdHide
+		return "Hide", trayCmd{kind: cmdHide}
 	}
-	return "Show", cmdShow
+	return "Show", trayCmd{kind: cmdShow}
 }
 
 func (t *sni) itemProps(it menuItem) map[string]dbus.Variant {
@@ -256,60 +325,92 @@ func (t *sni) itemProps(it menuItem) map[string]dbus.Variant {
 	if it.id == 1 {
 		label, _ = t.showHide()
 	}
-	return map[string]dbus.Variant{
+	props := map[string]dbus.Variant{
 		"label": dbus.MakeVariant(label),
 	}
+	if len(it.children) > 0 {
+		props["children-display"] = dbus.MakeVariant("submenu")
+	}
+	return props
+}
+
+func (t *sni) layoutFor(it menuItem) menuLayout {
+	out := menuLayout{
+		ID:    it.id,
+		Props: t.itemProps(it),
+	}
+	if len(it.children) > 0 {
+		ch := make([]dbus.Variant, 0, len(it.children))
+		for _, c := range it.children {
+			ch = append(ch, dbus.MakeVariant(t.layoutFor(c)))
+		}
+		out.Children = ch
+	}
+	return out
 }
 
 type menuHandler struct{ t *sni }
 
 func (m menuHandler) GetLayout(parentID, recursionDepth int32, propertyNames []string) (uint32, menuLayout, *dbus.Error) {
-	if parentID != 0 {
-		return 0, menuLayout{ID: parentID}, nil
+	m.t.mu.Lock()
+	items := m.t.menu
+	rev := m.t.revision
+	m.t.mu.Unlock()
+	if parentID == 0 {
+		children := make([]dbus.Variant, 0, len(items))
+		for _, it := range items {
+			children = append(children, dbus.MakeVariant(m.t.layoutFor(it)))
+		}
+		return rev, menuLayout{
+			ID:       0,
+			Props:    map[string]dbus.Variant{"children-display": dbus.MakeVariant("submenu")},
+			Children: children,
+		}, nil
 	}
-	children := make([]dbus.Variant, 0, len(menuItems))
-	for _, it := range menuItems {
-		children = append(children, dbus.MakeVariant(menuLayout{
-			ID:    it.id,
-			Props: m.t.itemProps(it),
-		}))
+	it, ok := findByID(items, parentID)
+	if !ok {
+		return rev, menuLayout{ID: parentID}, nil
 	}
-	root := menuLayout{
-		ID:       0,
-		Props:    map[string]dbus.Variant{"children-display": dbus.MakeVariant("submenu")},
-		Children: children,
-	}
-	return 1, root, nil
+	return rev, m.t.layoutFor(it), nil
 }
 
 func (m menuHandler) GetGroupProperties(ids []int32, propertyNames []string) ([]menuItemProps, *dbus.Error) {
+	m.t.mu.Lock()
+	items := m.t.menu
+	m.t.mu.Unlock()
 	var out []menuItemProps
-	want := ids
-	if len(want) == 0 {
-		for _, it := range menuItems {
+	if len(ids) == 0 {
+		walkItems(items, func(it menuItem) {
 			out = append(out, menuItemProps{ID: it.id, Props: m.t.itemProps(it)})
-		}
+		})
 		return out, nil
 	}
-	for _, id := range want {
-		for _, it := range menuItems {
-			if it.id == id {
-				out = append(out, menuItemProps{ID: it.id, Props: m.t.itemProps(it)})
-				break
-			}
+	for _, id := range ids {
+		if it, ok := findByID(items, id); ok {
+			out = append(out, menuItemProps{ID: it.id, Props: m.t.itemProps(it)})
 		}
 	}
 	return out, nil
 }
 
-func (m menuHandler) GetProperty(id int32, name string) (dbus.Variant, *dbus.Error) {
-	for _, it := range menuItems {
-		if it.id == id {
-			if v, ok := m.t.itemProps(it)[name]; ok {
-				return v, nil
-			}
-			return dbus.Variant{}, dbus.MakeFailedError(errors.New("property not found"))
+func walkItems(items []menuItem, fn func(menuItem)) {
+	for _, it := range items {
+		fn(it)
+		if len(it.children) > 0 {
+			walkItems(it.children, fn)
 		}
+	}
+}
+
+func (m menuHandler) GetProperty(id int32, name string) (dbus.Variant, *dbus.Error) {
+	m.t.mu.Lock()
+	items := m.t.menu
+	m.t.mu.Unlock()
+	if it, ok := findByID(items, id); ok {
+		if v, ok := m.t.itemProps(it)[name]; ok {
+			return v, nil
+		}
+		return dbus.Variant{}, dbus.MakeFailedError(errors.New("property not found"))
 	}
 	return dbus.Variant{}, dbus.MakeFailedError(errors.New("item not found"))
 }
@@ -318,18 +419,20 @@ func (m menuHandler) Event(id int32, eventID string, data dbus.Variant, timestam
 	if eventID != "clicked" {
 		return nil
 	}
-	for _, it := range menuItems {
-		if it.id == id && !it.sep {
-			cmd := it.cmd
-			if it.id == 1 {
-				_, cmd = m.t.showHide()
-			}
-			select {
-			case m.t.cmds <- cmd:
-			default:
-			}
-			return nil
-		}
+	m.t.mu.Lock()
+	items := m.t.menu
+	m.t.mu.Unlock()
+	it, ok := findByID(items, id)
+	if !ok || it.sep {
+		return nil
+	}
+	cmd := it.cmd
+	if it.id == 1 {
+		_, cmd = m.t.showHide()
+	}
+	select {
+	case m.t.cmds <- cmd:
+	default:
 	}
 	return nil
 }

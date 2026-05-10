@@ -146,9 +146,9 @@ func (x *xembed) loop(ctx context.Context, polls <-chan pollResult, windowState 
 			case xproto.ButtonPressEvent:
 				if e.Detail == 1 {
 					if shown {
-						x.send(cmdHide)
+						x.send(trayCmd{kind: cmdHide})
 					} else {
-						x.send(cmdShow)
+						x.send(trayCmd{kind: cmdShow})
 					}
 				}
 			case xproto.ExposeEvent:
@@ -187,6 +187,8 @@ func (x *xembed) send(c trayCmd) {
 func (x *xembed) shutdown() {
 	<-x.done
 }
+
+func (x *xembed) setMenu(items []menuItem) {}
 
 // toZPixmap converts the in-memory ARGB byte order produced by shield()
 // into the wire layout expected by PutImage(ZPixmap, depth=24) on a
