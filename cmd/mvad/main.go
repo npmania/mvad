@@ -31,6 +31,7 @@ import (
 	"github.com/npmania/mvad/internal/mullvad"
 	"github.com/npmania/mvad/internal/notify"
 	"github.com/npmania/mvad/internal/route"
+	"github.com/npmania/mvad/internal/split"
 	"github.com/npmania/mvad/internal/status"
 	"github.com/npmania/mvad/internal/udp2tcp"
 	"github.com/npmania/mvad/internal/wg"
@@ -764,6 +765,7 @@ func doConnect(opts connectOpts) (retErr error) {
 	if err := wg.Up(wcfg); err != nil {
 		return fmt.Errorf("configure wireguard interface: %w (is the wireguard kernel module loaded?)", err)
 	}
+	gw, dev, gwErr := route.Default()
 	if err := route.Set(ifname, endpoint.Addr()); err != nil {
 		wg.Down(ifname)
 		return fmt.Errorf("set default route: %w", err)
@@ -804,6 +806,11 @@ func doConnect(opts connectOpts) (retErr error) {
 			wg.Down(ifname)
 			return fmt.Errorf("start ss-local: %w", err)
 		}
+	}
+	if gwErr != nil {
+		fmt.Fprintf(os.Stderr, "mvad: split-tunnel setup skipped: %v; running without split-tunnel\n", gwErr)
+	} else if err := split.Up(gw, dev); err != nil {
+		fmt.Fprintf(os.Stderr, "mvad: split-tunnel setup failed: %v; running without split-tunnel\n", err)
 	}
 	return nil
 }
@@ -884,6 +891,9 @@ func doDisconnect() error {
 	var endpoint netip.Addr
 	if cfg, err := config.Load(); err == nil {
 		endpoint = cfg.LastEndpoint.Addr()
+	}
+	if err := split.Down(); err != nil {
+		fmt.Fprintf(os.Stderr, "mvad: split-tunnel teardown: %v\n", err)
 	}
 	return errors.Join(ssStop(), udp2tcpStop(), firewall.Down(), dns.Restore(ifname), route.Unset(ifname, endpoint), wg.Down(ifname))
 }
