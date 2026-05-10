@@ -256,18 +256,18 @@ func login(args []string) error {
 	if fs.NArg() > 1 {
 		return usagef(usageLogin)
 	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
 	var token string
-	if fs.NArg() == 1 {
+	switch {
+	case fs.NArg() == 1:
 		token = fs.Arg(0)
-	} else {
-		cfg, err := config.Load()
-		if err != nil {
-			return err
-		}
-		if cfg.AccountToken == "" {
-			return usagef(usageLogin)
-		}
+	case cfg.AccountToken != "":
 		token = cfg.AccountToken
+	default:
+		return usagef(usageLogin)
 	}
 	if len(token) != 16 {
 		return fmt.Errorf("invalid account token: must be 16 digits")
@@ -285,17 +285,13 @@ func login(args []string) error {
 		return err
 	}
 	if *keyFlag != "" {
-		return loginImport(ctx, c, token, *keyFlag, expiry)
+		return loginImport(ctx, c, cfg, token, *keyFlag, expiry)
 	}
 	priv, err := wgtypes.GeneratePrivateKey()
 	if err != nil {
 		return err
 	}
 	dev, err := c.RegisterDevice(ctx, token, priv.PublicKey())
-	if err != nil {
-		return err
-	}
-	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
@@ -313,7 +309,7 @@ func login(args []string) error {
 	return nil
 }
 
-func loginImport(ctx context.Context, c *mullvad.Client, token, keyStr string, expiry time.Time) error {
+func loginImport(ctx context.Context, c *mullvad.Client, cfg *config.Config, token, keyStr string, expiry time.Time) error {
 	priv, err := wgtypes.ParseKey(keyStr)
 	if err != nil {
 		return err
@@ -326,10 +322,6 @@ func loginImport(ctx context.Context, c *mullvad.Client, token, keyStr string, e
 	for _, d := range devs {
 		if d.PublicKey != pub {
 			continue
-		}
-		cfg, err := config.Load()
-		if err != nil {
-			return err
 		}
 		cfg.AccountToken = token
 		cfg.DeviceID = d.ID
