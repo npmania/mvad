@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
-	"math"
 	"os"
 	"strconv"
 	"sync"
@@ -356,36 +355,47 @@ func (m menuHandler) AboutToShowGroup(ids []int32) ([]int32, []int32, *dbus.Erro
 	return nil, nil, nil
 }
 
-func pixmap(c color.RGBA) []byte {
+func shield(c color.RGBA) []byte {
 	const sz = 22
-	const r = 10.0
-	cx, cy := 10.5, 10.5
 	out := make([]byte, sz*sz*4)
 	for y := range sz {
 		for x := range sz {
-			dx := float64(x) - cx
-			dy := float64(y) - cy
-			d := math.Sqrt(dx*dx + dy*dy)
-			var a float64
-			switch {
-			case d <= r-0.5:
-				a = 1
-			case d >= r+0.5:
-				a = 0
-			default:
-				a = r + 0.5 - d
+			n := 0
+			for dy := 0; dy < 2; dy++ {
+				for dx := 0; dx < 2; dx++ {
+					fx := float64(x) + 0.25 + float64(dx)*0.5
+					fy := float64(y) + 0.25 + float64(dy)*0.5
+					if inShield(fx, fy) {
+						n++
+					}
+				}
 			}
+			a := float64(n) / 4
 			i := (y*sz + x) * 4
 			out[i+0] = byte(a * 255)
-			out[i+1] = byte(float64(c.R) * a)
-			out[i+2] = byte(float64(c.G) * a)
-			out[i+3] = byte(float64(c.B) * a)
+			out[i+1] = c.R
+			out[i+2] = c.G
+			out[i+3] = c.B
 		}
 	}
 	return out
 }
 
+func inShield(x, y float64) bool {
+	if y < 2 || y > 21 {
+		return false
+	}
+	if y < 9 {
+		t := (y - 2) / 7
+		half := t * 9
+		return x >= 11-half && x <= 11+half
+	}
+	dx := (x - 11) / 9
+	dy := (y - 9) / 12
+	return dx*dx+dy*dy <= 1
+}
+
 var (
-	pmUp   = pixmap(color.RGBA{0x5D, 0xBF, 0x8E, 0xFF})
-	pmDown = pixmap(color.RGBA{0xC0, 0x20, 0x20, 0xFF})
+	pmUp   = shield(color.RGBA{0x5D, 0xBF, 0x8E, 0xFF})
+	pmDown = shield(color.RGBA{0xC0, 0x20, 0x20, 0xFF})
 )
