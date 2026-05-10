@@ -4,12 +4,19 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"image"
+	"image/color"
+	"image/draw"
 	"log"
 	"sync"
 
 	"github.com/jezek/xgb"
 	"github.com/jezek/xgb/shape"
 	"github.com/jezek/xgb/xproto"
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/gofont/goregular"
+	"golang.org/x/image/font/opentype"
+	"golang.org/x/image/math/fixed"
 )
 
 const (
@@ -26,11 +33,6 @@ type xembed struct {
 	events chan xgb.Event
 	done   chan struct{}
 
-	font        xproto.Font
-	fontAscent  int
-	fontDescent int
-	charW       int
-
 	mu   sync.Mutex
 	menu []menuItem
 
@@ -38,6 +40,7 @@ type xembed struct {
 	popupGC   xproto.Gcontext
 	popupRows []popupRow
 	popupYs   []int
+	popupRowH int
 	popupW    int
 	popupH    int
 	popupHov  int
@@ -153,7 +156,9 @@ func startXEmbed(ctx context.Context, polls <-chan pollResult, windowState <-cha
 	}
 	x.menu = buildTrayMenu(favorites, false, "")
 	log.Printf("tray: menu initialized (%d items)", len(x.menu))
-	x.openFont()
+	if _, err := popupFont(); err != nil {
+		log.Printf("tray: popup font: %v", err)
+	}
 	x.put(pmDown)
 
 	go x.read()
@@ -187,38 +192,26 @@ func buildShapeRects(pix []byte, w, h int) []xproto.Rectangle {
 	return out
 }
 
-func (x *xembed) openFont() {
-	names := []string{
-		"fixed",
-		"9x15",
-		"9x15bold",
-		"*-*-medium-r-normal--14-*-*-*-*-*-*-*",
-		"*",
-	}
-	for _, name := range names {
-		f, err := xproto.NewFontId(x.conn)
+var (
+	popupFaceOnce sync.Once
+	popupFace     font.Face
+	popupFaceErr  error
+)
+
+func popupFont() (font.Face, error) {
+	popupFaceOnce.Do(func() {
+		f, err := opentype.Parse(goregular.TTF)
 		if err != nil {
-			continue
+			popupFaceErr = err
+			return
 		}
-		if err := xproto.OpenFontChecked(x.conn, f, uint16(len(name)), name).Check(); err != nil {
-			continue
-		}
-		q, err := xproto.QueryFont(x.conn, xproto.Fontable(f)).Reply()
-		if err != nil {
-			xproto.CloseFont(x.conn, f)
-			continue
-		}
-		x.font = f
-		x.fontAscent = int(q.FontAscent)
-		x.fontDescent = int(q.FontDescent)
-		x.charW = int(q.MaxBounds.CharacterWidth)
-		if x.charW <= 0 {
-			x.charW = 7
-		}
-		log.Printf("tray: font %q", name)
-		return
-	}
-	log.Printf("tray: no usable X11 font; right-click menu disabled")
+		popupFace, popupFaceErr = opentype.NewFace(f, &opentype.FaceOptions{
+			Size:    13,
+			DPI:     96,
+			Hinting: font.HintingFull,
+		})
+	})
+	return popupFace, popupFaceErr
 }
 
 func (x *xembed) read() {
@@ -359,19 +352,28 @@ func (x *xembed) buildPopupRows(shown bool) []popupRow {
 	return rows
 }
 
-// Popup colors are written as raw RGB literals; that assumes the root
-// visual is TrueColor, which has held on every X server we care about
-// for two decades.
 const (
-	popupPadX   = 10
-	popupPadY   = 6
-	popupSepH   = 7
-	popupIndent = 14
+	popupPadX    = 12
+	popupPadY    = 8
+	popupSepH    = 9
+	popupIndent  = 16
+	popupBorderW = 1
+)
+
+var (
+	popupBg     = color.RGBA{0xFA, 0xFA, 0xF7, 0xFF}
+	popupFg     = color.RGBA{0x1A, 0x1A, 0x1A, 0xFF}
+	popupMuted  = color.RGBA{0x6B, 0x6B, 0x6B, 0xFF}
+	popupAccent = color.RGBA{0x2E, 0x7D, 0x5B, 0xFF}
+	popupEdge   = color.RGBA{0xE2, 0xE2, 0xDF, 0xFF}
+	popupAccFg  = color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}
 )
 
 func (x *xembed) openPopup(rootX, rootY int16, shown bool) {
 	x.closePopup()
-	if x.font == 0 {
+	face, err := popupFont()
+	if err != nil {
+		log.Printf("tray: popup font: %v", err)
 		return
 	}
 	rows := x.buildPopupRows(shown)
@@ -379,11 +381,15 @@ func (x *xembed) openPopup(rootX, rootY int16, shown bool) {
 		return
 	}
 
-	rowH := x.fontAscent + x.fontDescent + 4
-	maxW := 0
-	totalH := popupPadY * 2
+	m := face.Metrics()
+	ascent := m.Ascent.Ceil()
+	descent := m.Descent.Ceil()
+	rowH := ascent + descent + 6
+
+	var maxAdv fixed.Int26_6
+	totalH := 2*popupBorderW + 2*popupPadY
 	ys := make([]int, len(rows))
-	y := popupPadY
+	y := popupBorderW + popupPadY
 	for i, r := range rows {
 		ys[i] = y
 		if r.sep {
@@ -391,17 +397,17 @@ func (x *xembed) openPopup(rootX, rootY int16, shown bool) {
 			totalH += popupSepH
 			continue
 		}
-		w := len(r.label) * x.charW
+		adv := font.MeasureString(face, r.label)
 		if r.indent {
-			w += popupIndent
+			adv += fixed.I(popupIndent)
 		}
-		if w > maxW {
-			maxW = w
+		if adv > maxAdv {
+			maxAdv = adv
 		}
 		y += rowH
 		totalH += rowH
 	}
-	width := uint16(maxW + 2*popupPadX)
+	width := uint16(maxAdv.Ceil() + 2*popupPadX + 2*popupBorderW)
 	height := uint16(totalH)
 
 	screen := xproto.Setup(x.conn).DefaultScreen(x.conn)
@@ -445,13 +451,14 @@ func (x *xembed) openPopup(rootX, rootY int16, shown bool) {
 		return
 	}
 	xproto.CreateGC(x.conn, gc, xproto.Drawable(wid),
-		xproto.GcForeground|xproto.GcBackground|xproto.GcFont,
-		[]uint32{0x000000, 0xFFFFFF, uint32(x.font)})
+		xproto.GcForeground|xproto.GcBackground,
+		[]uint32{0x000000, 0xFFFFFF})
 
 	x.popup = wid
 	x.popupGC = gc
 	x.popupRows = rows
 	x.popupYs = ys
+	x.popupRowH = rowH
 	x.popupW = int(width)
 	x.popupH = int(height)
 	x.popupHov = -1
@@ -480,68 +487,92 @@ func (x *xembed) drawPopup() {
 	if x.popup == 0 {
 		return
 	}
-	rowH := x.fontAscent + x.fontDescent + 4
-
-	xproto.ChangeGC(x.conn, x.popupGC, xproto.GcForeground, []uint32{0xFFFFFF})
-	xproto.PolyFillRectangle(x.conn, xproto.Drawable(x.popup), x.popupGC,
-		[]xproto.Rectangle{{X: 0, Y: 0, Width: uint16(x.popupW), Height: uint16(x.popupH)}})
-
-	if x.popupHov >= 0 {
-		xproto.ChangeGC(x.conn, x.popupGC, xproto.GcForeground, []uint32{0xCCCCCC})
-		xproto.PolyFillRectangle(x.conn, xproto.Drawable(x.popup), x.popupGC,
-			[]xproto.Rectangle{{X: 0, Y: int16(x.popupYs[x.popupHov]), Width: uint16(x.popupW), Height: uint16(rowH)}})
+	face, err := popupFont()
+	if err != nil {
+		return
 	}
+	img := renderPopup(face, x.popupRows, x.popupYs, x.popupRowH, x.popupHov, x.popupW, x.popupH)
+	xproto.PutImage(x.conn, xproto.ImageFormatZPixmap, xproto.Drawable(x.popup), x.popupGC,
+		uint16(x.popupW), uint16(x.popupH), 0, 0, 0, 24, rgbaToZPixmap24(img))
+}
 
-	xproto.ChangeGC(x.conn, x.popupGC, xproto.GcForeground, []uint32{0x999999})
-	for i, r := range x.popupRows {
-		if !r.sep {
-			continue
-		}
-		y := x.popupYs[i] + popupSepH/2
-		xproto.PolyFillRectangle(x.conn, xproto.Drawable(x.popup), x.popupGC,
-			[]xproto.Rectangle{{X: int16(popupPadX), Y: int16(y), Width: uint16(x.popupW - 2*popupPadX), Height: 1}})
-	}
+func renderPopup(face font.Face, rows []popupRow, ys []int, rowH, hov, w, h int) *image.RGBA {
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	draw.Draw(img, img.Bounds(), &image.Uniform{C: popupBg}, image.Point{}, draw.Src)
 
-	for i, r := range x.popupRows {
+	edge := &image.Uniform{C: popupEdge}
+	draw.Draw(img, image.Rect(0, 0, w, popupBorderW), edge, image.Point{}, draw.Src)
+	draw.Draw(img, image.Rect(0, h-popupBorderW, w, h), edge, image.Point{}, draw.Src)
+	draw.Draw(img, image.Rect(0, 0, popupBorderW, h), edge, image.Point{}, draw.Src)
+	draw.Draw(img, image.Rect(w-popupBorderW, 0, w, h), edge, image.Point{}, draw.Src)
+
+	ascent := face.Metrics().Ascent.Ceil()
+
+	for i, r := range rows {
+		y := ys[i]
 		if r.sep {
+			sy := y + popupSepH/2
+			draw.Draw(img,
+				image.Rect(popupPadX, sy, w-popupPadX, sy+1),
+				&image.Uniform{C: popupMuted}, image.Point{}, draw.Src)
 			continue
 		}
-		bg := uint32(0xFFFFFF)
-		if i == x.popupHov {
-			bg = 0xCCCCCC
-		}
-		fg := uint32(0x000000)
+		fg := popupFg
 		if r.noop {
-			fg = 0x666666
+			fg = popupMuted
 		}
-		xproto.ChangeGC(x.conn, x.popupGC,
-			xproto.GcForeground|xproto.GcBackground,
-			[]uint32{fg, bg})
-		px := popupPadX
+		if i == hov && !r.noop {
+			draw.Draw(img,
+				image.Rect(popupBorderW, y, w-popupBorderW, y+rowH),
+				&image.Uniform{C: popupAccent}, image.Point{}, draw.Src)
+			fg = popupAccFg
+		}
+		px := popupBorderW + popupPadX
 		if r.indent {
 			px += popupIndent
 		}
-		py := x.popupYs[i] + 2 + x.fontAscent
-		label := r.label
-		if len(label) > 255 {
-			label = label[:255]
+		baseline := y + ascent + 3
+		d := font.Drawer{
+			Dst:  img,
+			Src:  &image.Uniform{C: fg},
+			Face: face,
+			Dot:  fixed.Point26_6{X: fixed.I(px), Y: fixed.I(baseline)},
 		}
-		xproto.ImageText8(x.conn, byte(len(label)), xproto.Drawable(x.popup), x.popupGC,
-			int16(px), int16(py), label)
+		d.DrawString(r.label)
 	}
+	return img
+}
+
+// rgbaToZPixmap24 reorders image.RGBA's R,G,B,A bytes into the depth-24
+// B,G,R,pad layout PutImage(ZPixmap) expects on a little-endian X server.
+func rgbaToZPixmap24(img *image.RGBA) []byte {
+	b := img.Bounds()
+	w := b.Dx()
+	h := b.Dy()
+	out := make([]byte, w*h*4)
+	for y := range h {
+		srow := img.Pix[y*img.Stride : y*img.Stride+w*4]
+		drow := out[y*w*4 : (y+1)*w*4]
+		for x := range w {
+			drow[x*4+0] = srow[x*4+2]
+			drow[x*4+1] = srow[x*4+1]
+			drow[x*4+2] = srow[x*4+0]
+			drow[x*4+3] = 0
+		}
+	}
+	return out
 }
 
 func (x *xembed) hoverPopup(y int) {
 	if x.popup == 0 {
 		return
 	}
-	rowH := x.fontAscent + x.fontDescent + 4
 	hov := -1
 	for i, r := range x.popupRows {
 		if r.sep || r.noop {
 			continue
 		}
-		if y >= x.popupYs[i] && y < x.popupYs[i]+rowH {
+		if y >= x.popupYs[i] && y < x.popupYs[i]+x.popupRowH {
 			hov = i
 			break
 		}
@@ -561,12 +592,11 @@ func (x *xembed) clickPopup(eventX, eventY int) {
 		x.closePopup()
 		return
 	}
-	rowH := x.fontAscent + x.fontDescent + 4
 	for i, r := range x.popupRows {
 		if r.sep {
 			continue
 		}
-		if eventY >= x.popupYs[i] && eventY < x.popupYs[i]+rowH {
+		if eventY >= x.popupYs[i] && eventY < x.popupYs[i]+x.popupRowH {
 			if r.noop {
 				return
 			}
