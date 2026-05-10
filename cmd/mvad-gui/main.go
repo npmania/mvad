@@ -2270,6 +2270,7 @@ func splitErrorPlaceholder(gtx layout.Context, th *material.Theme, pal palette, 
 	if errors.Is(err, split.ErrUnavailable) && !up {
 		msg = "connect to a relay first to use split-tunnel"
 	}
+	gtx.Constraints.Min.X = gtx.Constraints.Max.X
 	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical, Alignment: layout.Middle}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
