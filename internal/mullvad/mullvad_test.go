@@ -116,6 +116,25 @@ func TestBridges(t *testing.T) {
 	}
 }
 
+func TestCreateAccount(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/accounts/v1/accounts" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Errorf("Authorization should be empty, got %q", got)
+		}
+		w.Write(fixture(t, "account_create.json"))
+	}))
+	num, err := c.CreateAccount(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if num != "9876543210123456" {
+		t.Errorf("number = %q", num)
+	}
+}
+
 func TestAccountExpiry(t *testing.T) {
 	var tokenCalls atomic.Int32
 	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

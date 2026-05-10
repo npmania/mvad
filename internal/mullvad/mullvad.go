@@ -221,6 +221,23 @@ func (c *Client) Bridges(ctx context.Context) ([]Bridge, ShadowsocksEndpoint, er
 	return out, ss, nil
 }
 
+func (c *Client) CreateAccount(ctx context.Context) (string, error) {
+	req, err := c.newRequest(ctx, "POST", "/accounts/v1/accounts", nil)
+	if err != nil {
+		return "", err
+	}
+	var resp struct {
+		Number string `json:"number"`
+	}
+	if err := c.do(req, &resp); err != nil {
+		return "", err
+	}
+	if resp.Number == "" {
+		return "", errors.New("mullvad: empty account number")
+	}
+	return resp.Number, nil
+}
+
 func (c *Client) AccountExpiry(ctx context.Context, account string) (time.Time, error) {
 	var resp struct {
 		Expiry time.Time `json:"expiry"`

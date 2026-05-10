@@ -54,6 +54,7 @@ const usageText = `usage: mvad <command> [arguments]
 
 The commands are:
 
+	signup      create a new Mullvad account
 	login       log in to a Mullvad account
 	logout      revoke this device and clear stored credentials
 	devices     list or remove devices on this account
@@ -73,6 +74,7 @@ Run 'mvad <command> --help' for command-specific options.
 `
 
 const (
+	usageSignup          = "usage: mvad signup"
 	usageLogin           = "usage: mvad login [--key <base64-privkey>] <token>"
 	usageLogout          = "usage: mvad logout"
 	usageDevices         = "usage: mvad devices <list|remove>"
@@ -145,13 +147,15 @@ func main() {
 	args := flag.Args()[1:]
 	cmd := flag.Arg(0)
 	switch cmd {
-	case "login", "logout", "relays", "rotate-key":
+	case "signup", "login", "logout", "relays", "rotate-key":
 		if os.Geteuid() == 0 {
 			fmt.Fprintln(os.Stderr, "mvad: warning: running as root; this writes config to root's home, breaking subsequent unprivileged calls")
 		}
 	}
 	var err error
 	switch cmd {
+	case "signup":
+		err = signup(args)
 	case "login":
 		err = login(args)
 	case "logout":
@@ -210,6 +214,24 @@ func versionString() string {
 		return info.Main.Version
 	}
 	return "(devel)"
+}
+
+func signup(args []string) error {
+	if wantHelp(args) {
+		fmt.Println(usageSignup)
+		return nil
+	}
+	if len(args) != 0 {
+		return usagef(usageSignup)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	num, err := mullvad.New().CreateAccount(ctx)
+	if err != nil {
+		return fmt.Errorf("create account: %w", err)
+	}
+	fmt.Println(num)
+	return nil
 }
 
 func login(args []string) error {

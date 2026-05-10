@@ -1,0 +1,7 @@
+{
+  "id": "newacct01",
+  "number": "9876543210123456",
+  "expiry": "2026-05-11T00:00:00Z",
+  "max_devices": 5,
+  "can_add_devices": true
+}
