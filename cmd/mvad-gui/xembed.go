@@ -33,9 +33,11 @@ type xembed struct {
 	events chan xgb.Event
 	done   chan struct{}
 
-	mu   sync.Mutex
-	menu []menuItem
-	wake func()
+	mu     sync.Mutex
+	menu   []menuItem
+	dark   bool
+	wake   func()
+	redraw chan struct{}
 
 	popup     xproto.Window
 	popupGC   xproto.Gcontext
@@ -153,6 +155,7 @@ func startXEmbed(ctx context.Context, polls <-chan pollResult, windowState <-cha
 		cmds:     cmds,
 		events:   make(chan xgb.Event, 16),
 		done:     make(chan struct{}),
+		redraw:   make(chan struct{}, 1),
 		popupHov: -1,
 	}
 	x.menu = buildTrayMenu(favorites, false, "")
@@ -260,6 +263,8 @@ func (x *xembed) loop(ctx context.Context, polls <-chan pollResult, windowState 
 			x.put(last)
 		case s := <-windowState:
 			shown = s
+		case <-x.redraw:
+			x.drawPopup()
 		}
 	}
 }
@@ -327,6 +332,16 @@ func (x *xembed) setWake(fn func()) {
 	x.mu.Unlock()
 }
 
+func (x *xembed) setDark(v bool) {
+	x.mu.Lock()
+	x.dark = v
+	x.mu.Unlock()
+	select {
+	case x.redraw <- struct{}{}:
+	default:
+	}
+}
+
 func (x *xembed) doWake() {
 	x.mu.Lock()
 	fn := x.wake
@@ -377,13 +392,27 @@ const (
 	popupBorderW = 1
 )
 
+type popupPalette struct {
+	bg, fg, muted, accent, edge, accFg color.RGBA
+}
+
 var (
-	popupBg     = color.RGBA{0xFA, 0xFA, 0xF7, 0xFF}
-	popupFg     = color.RGBA{0x1A, 0x1A, 0x1A, 0xFF}
-	popupMuted  = color.RGBA{0x6B, 0x6B, 0x6B, 0xFF}
-	popupAccent = color.RGBA{0x2E, 0x7D, 0x5B, 0xFF}
-	popupEdge   = color.RGBA{0xE2, 0xE2, 0xDF, 0xFF}
-	popupAccFg  = color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}
+	popupLight = popupPalette{
+		bg:     color.RGBA{0xFA, 0xFA, 0xF7, 0xFF},
+		fg:     color.RGBA{0x1A, 0x1A, 0x1A, 0xFF},
+		muted:  color.RGBA{0x6B, 0x6B, 0x6B, 0xFF},
+		accent: color.RGBA{0x2E, 0x7D, 0x5B, 0xFF},
+		edge:   color.RGBA{0xE2, 0xE2, 0xDF, 0xFF},
+		accFg:  color.RGBA{0xFF, 0xFF, 0xFF, 0xFF},
+	}
+	popupDark = popupPalette{
+		bg:     color.RGBA{0x14, 0x14, 0x16, 0xFF},
+		fg:     color.RGBA{0xED, 0xED, 0xE8, 0xFF},
+		muted:  color.RGBA{0x8A, 0x8A, 0x88, 0xFF},
+		accent: color.RGBA{0x5D, 0xBF, 0x8E, 0xFF},
+		edge:   color.RGBA{0x2A, 0x2A, 0x2C, 0xFF},
+		accFg:  color.RGBA{0xFF, 0xFF, 0xFF, 0xFF},
+	}
 )
 
 func (x *xembed) openPopup(rootX, rootY int16, shown bool) {
@@ -508,16 +537,22 @@ func (x *xembed) drawPopup() {
 	if err != nil {
 		return
 	}
-	img := renderPopup(face, x.popupRows, x.popupYs, x.popupRowH, x.popupHov, x.popupW, x.popupH)
+	x.mu.Lock()
+	pal := popupLight
+	if x.dark {
+		pal = popupDark
+	}
+	x.mu.Unlock()
+	img := renderPopup(face, x.popupRows, x.popupYs, x.popupRowH, x.popupHov, x.popupW, x.popupH, pal)
 	xproto.PutImage(x.conn, xproto.ImageFormatZPixmap, xproto.Drawable(x.popup), x.popupGC,
 		uint16(x.popupW), uint16(x.popupH), 0, 0, 0, 24, rgbaToZPixmap24(img))
 }
 
-func renderPopup(face font.Face, rows []popupRow, ys []int, rowH, hov, w, h int) *image.RGBA {
+func renderPopup(face font.Face, rows []popupRow, ys []int, rowH, hov, w, h int, pal popupPalette) *image.RGBA {
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	draw.Draw(img, img.Bounds(), &image.Uniform{C: popupBg}, image.Point{}, draw.Src)
+	draw.Draw(img, img.Bounds(), &image.Uniform{C: pal.bg}, image.Point{}, draw.Src)
 
-	edge := &image.Uniform{C: popupEdge}
+	edge := &image.Uniform{C: pal.edge}
 	draw.Draw(img, image.Rect(0, 0, w, popupBorderW), edge, image.Point{}, draw.Src)
 	draw.Draw(img, image.Rect(0, h-popupBorderW, w, h), edge, image.Point{}, draw.Src)
 	draw.Draw(img, image.Rect(0, 0, popupBorderW, h), edge, image.Point{}, draw.Src)
@@ -531,18 +566,18 @@ func renderPopup(face font.Face, rows []popupRow, ys []int, rowH, hov, w, h int)
 			sy := y + popupSepH/2
 			draw.Draw(img,
 				image.Rect(popupPadX, sy, w-popupPadX, sy+1),
-				&image.Uniform{C: popupMuted}, image.Point{}, draw.Src)
+				&image.Uniform{C: pal.muted}, image.Point{}, draw.Src)
 			continue
 		}
-		fg := popupFg
+		fg := pal.fg
 		if r.noop {
-			fg = popupMuted
+			fg = pal.muted
 		}
 		if i == hov && !r.noop {
 			draw.Draw(img,
 				image.Rect(popupBorderW, y, w-popupBorderW, y+rowH),
-				&image.Uniform{C: popupAccent}, image.Point{}, draw.Src)
-			fg = popupAccFg
+				&image.Uniform{C: pal.accent}, image.Point{}, draw.Src)
+			fg = pal.accFg
 		}
 		px := popupBorderW + popupPadX
 		if r.indent {

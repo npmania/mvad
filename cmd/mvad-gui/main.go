@@ -202,6 +202,7 @@ type tray interface {
 	shutdown()
 	setMenu(items []menuItem)
 	setWake(fn func())
+	setDark(v bool)
 }
 
 var (
@@ -323,6 +324,9 @@ func main() {
 		tr = nil
 	}
 	st.tr = tr
+	if tr != nil {
+		tr.setDark(st.dark)
+	}
 
 	go func() {
 		defer func() {
@@ -612,6 +616,9 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 				st.cfg.Dark = st.dark
 				st.cfg.DarkSet = true
 				_ = st.cfg.Save()
+				if st.tr != nil {
+					st.tr.setDark(st.dark)
+				}
 			}
 			if st.tabConn.Clicked(gtx) {
 				st.view = viewConnect

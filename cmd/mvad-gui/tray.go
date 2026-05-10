@@ -196,6 +196,8 @@ func (t *sni) setWake(fn func()) {
 	t.mu.Unlock()
 }
 
+func (t *sni) setDark(bool) {}
+
 func (t *sni) doWake() {
 	t.mu.Lock()
 	fn := t.wake
