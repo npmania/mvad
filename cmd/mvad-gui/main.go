@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -133,6 +134,7 @@ type state struct {
 	rotateKeyArmed                     time.Time
 
 	loginToken widget.Editor
+	loginKey   widget.Editor
 	loginBtn   widget.Clickable
 	signupBtn  widget.Clickable
 	loginErr   string
@@ -246,6 +248,7 @@ func main() {
 	st.addPID.Submit = true
 	st.runCmdEd.SingleLine = true
 	st.loginToken.SingleLine = true
+	st.loginKey.SingleLine = true
 
 	cfg, err := config.Load()
 	if err != nil || cfg == nil {
@@ -451,6 +454,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 						st.cfg = c
 					}
 					st.loginToken.SetText("")
+					st.loginKey.SetText("")
 					st.devices = nil
 					st.devicesLoaded = false
 					st.devicesErr = ""
@@ -736,15 +740,28 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 			}
 			if !st.running && st.loginBtn.Clicked(gtx) {
 				token := strings.TrimSpace(st.loginToken.Text())
-				if token == "" {
+				key := strings.TrimSpace(st.loginKey.Text())
+				keyOK := false
+				if b, err := base64.StdEncoding.DecodeString(key); err == nil && len(b) == 32 {
+					keyOK = true
+				}
+				switch {
+				case token == "":
 					st.loginErr = "enter account number"
-				} else {
+				case key != "" && !keyOK:
+					st.loginErr = "invalid private key — expected 44 base64 chars"
+				default:
 					st.loginErr = ""
 					st.cmdErr = nil
 					st.cmdOut = ""
 					st.running = true
 					st.runningName = "login"
-					go runCmd(st.ctx, w, st.cmdDone, "login", "--", token)
+					args := []string{"login"}
+					if key != "" {
+						args = append(args, "--key="+key)
+					}
+					args = append(args, "--", token)
+					go runCmd(st.ctx, w, st.cmdDone, args...)
 				}
 			}
 			if !st.running && st.signupBtn.Clicked(gtx) {
@@ -1367,6 +1384,10 @@ func accountSignInRows(th *material.Theme, st *state, pal palette) []layout.Flex
 		layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return splitEditor(gtx, th, &st.loginToken, pal, "Account number")
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return splitEditor(gtx, th, &st.loginKey, pal, "Private key (optional)")
 		}),
 	}
 	if st.loginErr != "" {
