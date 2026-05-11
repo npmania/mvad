@@ -237,31 +237,42 @@ type state struct {
 	deviceArmed    map[string]time.Time
 	deviceRemoving string
 
-	splitList        widget.List
-	splitRefresh     widget.Clickable
-	addPID           widget.Editor
-	runCmdEd         widget.Editor
-	runBtn           widget.Clickable
-	clearBtn         widget.Clickable
-	clearArmed       time.Time
-	splitPIDs        []splitPID
-	splitProcs       []splitPID
-	splitErr         error
-	splitLoading     bool
-	splitLoaded      bool
-	splitFirstLoaded bool
-	splitClicks      map[int]*widget.Clickable
-	splitArmed       map[int]time.Time
-	splitRemoving    int
-	runStarting      []string
-	procFilter       widget.Editor
-	procList         widget.List
-	procAddClicks    map[int]*widget.Clickable
-	appClicks        map[string]*widget.Clickable
-	appRemoveClicks  map[string]*widget.Clickable
-	addAppEd         widget.Editor
-	splitAdvOpen     bool
-	splitAdvToggle   widget.Clickable
+	splitList          widget.List
+	splitRefresh       widget.Clickable
+	addPID             widget.Editor
+	runCmdEd           widget.Editor
+	runBtn             widget.Clickable
+	clearBtn           widget.Clickable
+	clearArmed         time.Time
+	splitPIDs          []splitPID
+	splitProcs         []splitPID
+	splitErr           error
+	splitLoading       bool
+	splitLoaded        bool
+	splitFirstLoaded   bool
+	splitClicks        map[int]*widget.Clickable
+	splitArmed         map[int]time.Time
+	splitRemoving      int
+	runStarting        []string
+	procFilter         widget.Editor
+	procList           widget.List
+	procAddClicks      map[int]*widget.Clickable
+	procGroupOpen      map[string]bool
+	procGroupClicks    map[string]*widget.Clickable
+	procGroupAddClicks map[string]*widget.Clickable
+	splitAddQueue      []int
+	appClicks          map[string]*widget.Clickable
+	appRemoveClicks    map[string]*widget.Clickable
+	addAppEd           widget.Editor
+	splitAdvOpen       bool
+	splitAdvToggle     widget.Clickable
+	splitOtherOpen     bool
+	splitOtherToggle   widget.Clickable
+
+	headerHover  map[string]*widget.Clickable
+	deviceHover  map[string]*widget.Clickable
+	procRowHover map[int]*widget.Clickable
+	pidRowHover  map[int]*widget.Clickable
 
 	favClicks     map[string]*widget.Clickable
 	tr            tray
@@ -359,6 +370,13 @@ func main() {
 	st.splitArmed = map[int]time.Time{}
 	st.favClicks = map[string]*widget.Clickable{}
 	st.procAddClicks = map[int]*widget.Clickable{}
+	st.procGroupOpen = map[string]bool{}
+	st.procGroupClicks = map[string]*widget.Clickable{}
+	st.procGroupAddClicks = map[string]*widget.Clickable{}
+	st.headerHover = map[string]*widget.Clickable{}
+	st.deviceHover = map[string]*widget.Clickable{}
+	st.procRowHover = map[int]*widget.Clickable{}
+	st.pidRowHover = map[int]*widget.Clickable{}
 	st.appClicks = map[string]*widget.Clickable{}
 	st.appRemoveClicks = map[string]*widget.Clickable{}
 	st.splitList.Axis = layout.Vertical
@@ -396,6 +414,7 @@ func main() {
 	st.allowLAN.Value = cfg.AllowLAN
 	st.lockdownOn.Value = cfg.LockdownOn
 	st.closeToTray.Value = !cfg.NoCloseToTray
+	st.splitOtherOpen = cfg.SplitOtherOpen
 	st.transport = cfg.LastTransport
 	switch st.transport {
 	case "tcp", "shadowsocks":
@@ -608,6 +627,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 					st.devicesErr = ""
 					st.deviceArmed = map[string]time.Time{}
 					st.deviceClicks = map[string]*widget.Clickable{}
+					st.deviceHover = map[string]*widget.Clickable{}
 					st.deviceRemoving = ""
 				}
 			case "rotate-key":
@@ -715,13 +735,32 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 						delete(st.splitArmed, pid)
 					}
 				}
+				for pid := range st.pidRowHover {
+					if !keep[pid] {
+						delete(st.pidRowHover, pid)
+					}
+				}
 				keepProc := make(map[int]bool, len(r.procs))
+				keepComm := make(map[string]bool, len(r.procs))
 				for _, p := range r.procs {
 					keepProc[p.pid] = true
+					keepComm[p.comm] = true
 				}
 				for pid := range st.procAddClicks {
 					if !keepProc[pid] {
 						delete(st.procAddClicks, pid)
+					}
+				}
+				for pid := range st.procRowHover {
+					if !keepProc[pid] {
+						delete(st.procRowHover, pid)
+					}
+				}
+				for comm := range st.procGroupClicks {
+					if !keepComm[comm] {
+						delete(st.procGroupClicks, comm)
+						delete(st.procGroupAddClicks, comm)
+						delete(st.procGroupOpen, comm)
 					}
 				}
 			}
@@ -766,6 +805,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 				st.devicesErr = ""
 				delete(st.deviceClicks, r.id)
 				delete(st.deviceArmed, r.id)
+				delete(st.deviceHover, r.id)
 				if !st.acctRefreshing {
 					if st.cfg.AccountToken != "" {
 						st.acctRefreshing = true
@@ -1008,6 +1048,35 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 			}
 			if st.splitAdvToggle.Clicked(gtx) {
 				st.splitAdvOpen = !st.splitAdvOpen
+			}
+			if st.splitOtherToggle.Clicked(gtx) {
+				st.splitOtherOpen = !st.splitOtherOpen
+				st.cfg.SplitOtherOpen = st.splitOtherOpen
+				_ = st.cfg.Save()
+			}
+			for comm, c := range st.procGroupClicks {
+				if c.Clicked(gtx) {
+					st.procGroupOpen[comm] = !st.procGroupOpen[comm]
+				}
+			}
+			for comm, c := range st.procGroupAddClicks {
+				if !c.Clicked(gtx) {
+					continue
+				}
+				for _, p := range st.splitProcs {
+					if p.comm == comm {
+						st.splitAddQueue = append(st.splitAddQueue, p.pid)
+					}
+				}
+			}
+			if !st.running && len(st.splitAddQueue) > 0 {
+				pid := st.splitAddQueue[0]
+				st.splitAddQueue = st.splitAddQueue[1:]
+				st.cmdErr = nil
+				st.cmdOut = ""
+				st.running = true
+				st.runningName = "split-add"
+				go runCmd(st.ctx, w, st.cmdDone, "split", "add-pid", strconv.Itoa(pid))
 			}
 			if st.allowLAN.Update(gtx) {
 				if st.snap.Up {
@@ -1919,39 +1988,50 @@ func devicesSection(th *material.Theme, st *state, pal palette) []layout.FlexChi
 }
 
 func deviceRow(gtx layout.Context, th *material.Theme, st *state, pal palette, d mullvad.Device) layout.Dimensions {
-	return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
-			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-				lbl := material.Label(th, unit.Sp(13), d.Name)
-				lbl.Color = pal.fg
-				return lbl.Layout(gtx)
-			}),
-			layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				if d.ID == st.cfg.DeviceID {
-					lbl := material.Label(th, unit.Sp(12), "this device")
-					lbl.Color = pal.muted
-					return lbl.Layout(gtx)
-				}
-				if d.ID == st.deviceRemoving {
-					lbl := material.Label(th, unit.Sp(12), "removing…")
-					lbl.Color = pal.muted
-					return lbl.Layout(gtx)
-				}
-				c, ok := st.deviceClicks[d.ID]
-				if !ok {
-					c = &widget.Clickable{}
-					st.deviceClicks[d.ID] = c
-				}
-				label := "remove"
-				col := pal.accent
-				if t, armed := st.deviceArmed[d.ID]; armed && time.Since(t) < 5*time.Second {
-					label = "Confirm?"
-					col = pal.errFg
-				}
-				return inlineAction(gtx, th, c, unit.Sp(13), label, col)
-			}),
-		)
+	hc := st.deviceHover[d.ID]
+	if hc == nil {
+		hc = &widget.Clickable{}
+		st.deviceHover[d.ID] = hc
+	}
+	for hc.Clicked(gtx) {
+	}
+	return hc.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return hoverBg(gtx, hc, pal, func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						lbl := material.Label(th, unit.Sp(13), d.Name)
+						lbl.Color = pal.fg
+						return lbl.Layout(gtx)
+					}),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						if d.ID == st.cfg.DeviceID {
+							lbl := material.Label(th, unit.Sp(12), "this device")
+							lbl.Color = pal.muted
+							return lbl.Layout(gtx)
+						}
+						if d.ID == st.deviceRemoving {
+							lbl := material.Label(th, unit.Sp(12), "removing…")
+							lbl.Color = pal.muted
+							return lbl.Layout(gtx)
+						}
+						c, ok := st.deviceClicks[d.ID]
+						if !ok {
+							c = &widget.Clickable{}
+							st.deviceClicks[d.ID] = c
+						}
+						label := "remove"
+						col := pal.accent
+						if t, armed := st.deviceArmed[d.ID]; armed && time.Since(t) < 5*time.Second {
+							label = "Confirm?"
+							col = pal.errFg
+						}
+						return boxedInline(gtx, th, c, pal, unit.Sp(13), label, col)
+					}),
+				)
+			})
+		})
 	})
 }
 
@@ -2107,6 +2187,39 @@ func inlineAction(gtx layout.Context, th *material.Theme, clk *widget.Clickable,
 	})
 }
 
+func hoverBg(gtx layout.Context, clk *widget.Clickable, pal palette, w layout.Widget) layout.Dimensions {
+	macro := op.Record(gtx.Ops)
+	dims := w(gtx)
+	call := macro.Stop()
+	if clk.Hovered() {
+		paint.FillShape(gtx.Ops, pal.dim, clip.Rect{Max: dims.Size}.Op())
+	}
+	call.Add(gtx.Ops)
+	return dims
+}
+
+func boxedInline(gtx layout.Context, th *material.Theme, clk *widget.Clickable,
+	pal palette, sz unit.Sp, label string, col color.NRGBA) layout.Dimensions {
+	return clk.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		pointer.CursorPointer.Add(gtx.Ops)
+		macro := op.Record(gtx.Ops)
+		dims := layout.UniformInset(unit.Dp(6)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Label(th, sz, label)
+			lbl.Color = col
+			return lbl.Layout(gtx)
+		})
+		call := macro.Stop()
+		border := pal.dim
+		if clk.Hovered() {
+			border = pal.fg
+		}
+		rr := clip.UniformRRect(image.Rectangle{Max: dims.Size}, gtx.Dp(4))
+		paint.FillShape(gtx.Ops, border, clip.Stroke{Path: rr.Path(gtx.Ops), Width: float32(max(gtx.Dp(1), 1))}.Op())
+		call.Add(gtx.Ops)
+		return dims
+	})
+}
+
 func errorPlaceholder(gtx layout.Context, th *material.Theme, pal palette, msg string) layout.Dimensions {
 	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical, Alignment: layout.Middle}.Layout(gtx,
@@ -2152,46 +2265,52 @@ func headerRow(gtx layout.Context, th *material.Theme, st *state, pal palette, l
 	if ac.Clicked(gtx) {
 		st.selected = code
 	}
+	hc := st.headerHover[key]
+	if hc == nil {
+		hc = &widget.Clickable{}
+		st.headerHover[key] = hc
+	}
+	for hc.Clicked(gtx) {
+	}
 	open := st.expanded[key] || st.filter.Text() != ""
 	glyph := "▸"
 	if open {
 		glyph = "▾"
 	}
 	selected := st.selected == code
+	chipCol := pal.muted
+	if selected {
+		chipCol = pal.accent
+	}
 	return layout.Stack{}.Layout(gtx,
 		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
 			gtx.Constraints.Min.X = gtx.Constraints.Max.X
-			return layout.Inset{Left: leftPad, Top: unit.Dp(6), Bottom: unit.Dp(6)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
-					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-						return ec.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							pointer.CursorPointer.Add(gtx.Ops)
-							gtx.Constraints.Min.X = gtx.Constraints.Max.X
-							lbl := material.Label(th, sz, label)
-							lbl.Color = pal.fg
-							return lbl.Layout(gtx)
-						})
-					}),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return ac.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							pointer.CursorPointer.Add(gtx.Ops)
-							return layout.Inset{Left: unit.Dp(8), Right: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-								lbl := material.Label(th, unit.Sp(12), "Any")
-								if selected {
-									lbl.Color = pal.accent
-								} else {
-									lbl.Color = pal.muted
-								}
+			return hc.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return hoverBg(gtx, hc, pal, func(gtx layout.Context) layout.Dimensions {
+					return layout.Inset{Left: leftPad, Top: unit.Dp(6), Bottom: unit.Dp(6)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+							layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+								return ec.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+									pointer.CursorPointer.Add(gtx.Ops)
+									gtx.Constraints.Min.X = gtx.Constraints.Max.X
+									lbl := material.Label(th, sz, label)
+									lbl.Color = pal.fg
+									return lbl.Layout(gtx)
+								})
+							}),
+							layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return boxedInline(gtx, th, ac, pal, unit.Sp(12), "Any", chipCol)
+							}),
+							layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								lbl := material.Label(th, sz, glyph)
+								lbl.Color = pal.muted
 								return lbl.Layout(gtx)
-							})
-						})
-					}),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						lbl := material.Label(th, sz, glyph)
-						lbl.Color = pal.muted
-						return lbl.Layout(gtx)
-					}),
-				)
+							}),
+						)
+					})
+				})
 			})
 		}),
 		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
@@ -2218,23 +2337,25 @@ func relayRow(gtx layout.Context, th *material.Theme, st *state, pal palette, r 
 	return rc.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		pointer.CursorPointer.Add(gtx.Ops)
 		gtx.Constraints.Min.X = gtx.Constraints.Max.X
-		return layout.Stack{}.Layout(gtx,
-			layout.Stacked(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Left: unit.Dp(24), Top: unit.Dp(4), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					lbl := material.Label(th, unit.Sp(13), r.Hostname)
-					lbl.Color = pal.fg
-					return lbl.Layout(gtx)
-				})
-			}),
-			layout.Expanded(func(gtx layout.Context) layout.Dimensions {
-				if !selected {
-					return layout.Dimensions{}
-				}
-				sz := image.Pt(gtx.Dp(2), gtx.Constraints.Min.Y)
-				paint.FillShape(gtx.Ops, pal.accent, clip.Rect{Max: sz}.Op())
-				return layout.Dimensions{Size: sz}
-			}),
-		)
+		return hoverBg(gtx, rc, pal, func(gtx layout.Context) layout.Dimensions {
+			return layout.Stack{}.Layout(gtx,
+				layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+					return layout.Inset{Left: unit.Dp(24), Top: unit.Dp(4), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						lbl := material.Label(th, unit.Sp(13), r.Hostname)
+						lbl.Color = pal.fg
+						return lbl.Layout(gtx)
+					})
+				}),
+				layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+					if !selected {
+						return layout.Dimensions{}
+					}
+					sz := image.Pt(gtx.Dp(2), gtx.Constraints.Min.Y)
+					paint.FillShape(gtx.Ops, pal.accent, clip.Rect{Max: sz}.Op())
+					return layout.Dimensions{Size: sz}
+				}),
+			)
+		})
 	})
 }
 
@@ -2877,7 +2998,16 @@ func splitBody(gtx layout.Context, th *material.Theme, st *state, pal palette) l
 		)
 	}
 	apps := availableApps(st)
-	var children []layout.FlexChild
+	children := []layout.FlexChild{
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return splitSectionHeader(gtx, th, pal, "Active in split-tunnel", &st.splitRefresh, st.splitLoading)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return splitActiveBlock(gtx, th, st, pal)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
+	}
 	if len(apps) > 0 {
 		children = append(children,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -2888,24 +3018,22 @@ func splitBody(gtx layout.Context, th *material.Theme, st *state, pal palette) l
 	}
 	children = append(children,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return splitSectionHeader(gtx, th, pal, "Active in split-tunnel", &st.splitRefresh, st.splitLoading)
+			return splitOtherHeader(gtx, th, st, pal, len(st.splitProcs))
 		}),
-		layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return splitActiveBlock(gtx, th, st, pal)
-		}),
-		layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return splitSectionHeader(gtx, th, pal, "Other processes", nil, false)
-		}),
-		layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return filterEditor(gtx, th, &st.procFilter, pal)
-		}),
-		layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
-		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-			return splitOtherList(gtx, th, st, pal)
-		}),
+	)
+	if st.splitOtherOpen {
+		children = append(children,
+			layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return boxedEditor(gtx, th, &st.procFilter, pal, "filter by name or pid")
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				return splitOtherList(gtx, th, st, pal)
+			}),
+		)
+	}
+	children = append(children,
 		layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return splitAdvancedToggle(gtx, th, st, pal)
@@ -2930,8 +3058,8 @@ func splitBody(gtx layout.Context, th *material.Theme, st *state, pal palette) l
 func splitSectionHeader(gtx layout.Context, th *material.Theme, pal palette, title string, refresh *widget.Clickable, loading bool) layout.Dimensions {
 	return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			lbl := material.Label(th, unit.Sp(13), title)
-			lbl.Color = pal.muted
+			lbl := material.Label(th, unit.Sp(14), title)
+			lbl.Color = pal.fg
 			return lbl.Layout(gtx)
 		}),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
@@ -2944,6 +3072,21 @@ func splitSectionHeader(gtx layout.Context, th *material.Theme, pal palette, tit
 			return refreshGlyph(gtx, th, refresh, loading, pal)
 		}),
 	)
+}
+
+func splitOtherHeader(gtx layout.Context, th *material.Theme, st *state, pal palette, count int) layout.Dimensions {
+	glyph := "▸"
+	if st.splitOtherOpen {
+		glyph = "▾"
+	}
+	title := fmt.Sprintf("Other processes (%d) %s", count, glyph)
+	return st.splitOtherToggle.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		pointer.CursorPointer.Add(gtx.Ops)
+		gtx.Constraints.Min.X = gtx.Constraints.Max.X
+		lbl := material.Label(th, unit.Sp(14), title)
+		lbl.Color = pal.fg
+		return lbl.Layout(gtx)
+	})
 }
 
 func appShortcutsSection(gtx layout.Context, th *material.Theme, st *state, pal palette, apps []string) layout.Dimensions {
@@ -3039,42 +3182,123 @@ func splitOtherList(gtx layout.Context, th *material.Theme, st *state, pal palet
 		}
 		return centerLabel(gtx, th, pal.muted, "none")
 	}
+	type entry struct {
+		group bool
+		comm  string
+		pids  []splitPID
+		pid   splitPID
+	}
+	var entries []entry
+	for i := 0; i < len(procs); {
+		j := i + 1
+		for j < len(procs) && procs[j].comm == procs[i].comm {
+			j++
+		}
+		if j-i == 1 {
+			entries = append(entries, entry{pid: procs[i]})
+		} else {
+			run := append([]splitPID(nil), procs[i:j]...)
+			entries = append(entries, entry{group: true, comm: procs[i].comm, pids: run})
+		}
+		i = j
+	}
 	list := material.List(th, &st.procList)
-	return list.Layout(gtx, len(procs), func(gtx layout.Context, i int) layout.Dimensions {
-		return splitOtherRow(gtx, th, st, pal, procs[i])
+	return list.Layout(gtx, len(entries), func(gtx layout.Context, i int) layout.Dimensions {
+		e := entries[i]
+		if !e.group {
+			return splitOtherRow(gtx, th, st, pal, e.pid, 0)
+		}
+		open := st.procGroupOpen[e.comm]
+		var children []layout.FlexChild
+		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return splitOtherGroupRow(gtx, th, st, pal, e.comm, len(e.pids), open)
+		}))
+		if open {
+			for _, p := range e.pids {
+				children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return splitOtherRow(gtx, th, st, pal, p, unit.Dp(16))
+				}))
+			}
+		}
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
 	})
 }
 
-func splitOtherRow(gtx layout.Context, th *material.Theme, st *state, pal palette, p splitPID) layout.Dimensions {
-	return layout.Inset{Top: unit.Dp(2), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				gtx.Constraints.Min.X = gtx.Dp(56)
-				lbl := material.Label(th, unit.Sp(13), strconv.Itoa(p.pid))
-				lbl.Color = pal.fg
-				return lbl.Layout(gtx)
-			}),
-			layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
-			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-				lbl := material.Label(th, unit.Sp(13), p.comm)
-				lbl.Color = pal.muted
-				return lbl.Layout(gtx)
-			}),
-			layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				c, ok := st.procAddClicks[p.pid]
-				if !ok {
-					c = &widget.Clickable{}
-					st.procAddClicks[p.pid] = c
-				}
-				return c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					pointer.CursorPointer.Add(gtx.Ops)
-					lbl := material.Label(th, unit.Sp(14), "+")
+func splitOtherGroupRow(gtx layout.Context, th *material.Theme, st *state, pal palette, comm string, n int, open bool) layout.Dimensions {
+	tc := st.procGroupClicks[comm]
+	if tc == nil {
+		tc = &widget.Clickable{}
+		st.procGroupClicks[comm] = tc
+	}
+	ac := st.procGroupAddClicks[comm]
+	if ac == nil {
+		ac = &widget.Clickable{}
+		st.procGroupAddClicks[comm] = ac
+	}
+	glyph := "▸"
+	if open {
+		glyph = "▾"
+	}
+	return tc.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		pointer.CursorPointer.Add(gtx.Ops)
+		return layout.Inset{Top: unit.Dp(2), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Label(th, unit.Sp(13), fmt.Sprintf("%s × %d", comm, n))
 					lbl.Color = pal.fg
 					return lbl.Layout(gtx)
-				})
-			}),
-		)
+				}),
+				layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return boxedInline(gtx, th, ac, pal, unit.Sp(13), "+ all", pal.fg)
+				}),
+				layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Label(th, unit.Sp(13), glyph)
+					lbl.Color = pal.muted
+					return lbl.Layout(gtx)
+				}),
+			)
+		})
+	})
+}
+
+func splitOtherRow(gtx layout.Context, th *material.Theme, st *state, pal palette, p splitPID, leftPad unit.Dp) layout.Dimensions {
+	hc := st.procRowHover[p.pid]
+	if hc == nil {
+		hc = &widget.Clickable{}
+		st.procRowHover[p.pid] = hc
+	}
+	for hc.Clicked(gtx) {
+	}
+	return hc.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return hoverBg(gtx, hc, pal, func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Top: unit.Dp(2), Bottom: unit.Dp(2), Left: leftPad}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						gtx.Constraints.Min.X = gtx.Dp(56)
+						lbl := material.Label(th, unit.Sp(13), strconv.Itoa(p.pid))
+						lbl.Color = pal.fg
+						return lbl.Layout(gtx)
+					}),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						lbl := material.Label(th, unit.Sp(13), p.comm)
+						lbl.Color = pal.muted
+						return lbl.Layout(gtx)
+					}),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						c, ok := st.procAddClicks[p.pid]
+						if !ok {
+							c = &widget.Clickable{}
+							st.procAddClicks[p.pid] = c
+						}
+						return boxedInline(gtx, th, c, pal, unit.Sp(13), "+", pal.fg)
+					}),
+				)
+			})
+		})
 	})
 }
 
@@ -3164,46 +3388,52 @@ func splitAppRow(gtx layout.Context, th *material.Theme, st *state, pal palette,
 }
 
 func splitPIDRow(gtx layout.Context, th *material.Theme, st *state, pal palette, p splitPID) layout.Dimensions {
-	return layout.Inset{Top: unit.Dp(2), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				gtx.Constraints.Min.X = gtx.Dp(56)
-				lbl := material.Label(th, unit.Sp(13), strconv.Itoa(p.pid))
-				lbl.Color = pal.fg
-				return lbl.Layout(gtx)
-			}),
-			layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
-			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-				lbl := material.Label(th, unit.Sp(13), p.comm)
-				lbl.Color = pal.muted
-				return lbl.Layout(gtx)
-			}),
-			layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				if st.splitRemoving == p.pid {
-					lbl := material.Label(th, unit.Sp(12), "removing…")
-					lbl.Color = pal.muted
-					return lbl.Layout(gtx)
-				}
-				c, ok := st.splitClicks[p.pid]
-				if !ok {
-					c = &widget.Clickable{}
-					st.splitClicks[p.pid] = c
-				}
-				label := "✕"
-				col := pal.muted
-				if t, armed := st.splitArmed[p.pid]; armed && time.Since(t) < 5*time.Second {
-					label = "Confirm?"
-					col = pal.errFg
-				}
-				return c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					pointer.CursorPointer.Add(gtx.Ops)
-					lbl := material.Label(th, unit.Sp(13), label)
-					lbl.Color = col
-					return lbl.Layout(gtx)
-				})
-			}),
-		)
+	hc := st.pidRowHover[p.pid]
+	if hc == nil {
+		hc = &widget.Clickable{}
+		st.pidRowHover[p.pid] = hc
+	}
+	for hc.Clicked(gtx) {
+	}
+	return hc.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return hoverBg(gtx, hc, pal, func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Top: unit.Dp(2), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						gtx.Constraints.Min.X = gtx.Dp(56)
+						lbl := material.Label(th, unit.Sp(13), strconv.Itoa(p.pid))
+						lbl.Color = pal.fg
+						return lbl.Layout(gtx)
+					}),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						lbl := material.Label(th, unit.Sp(13), p.comm)
+						lbl.Color = pal.muted
+						return lbl.Layout(gtx)
+					}),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						if st.splitRemoving == p.pid {
+							lbl := material.Label(th, unit.Sp(12), "removing…")
+							lbl.Color = pal.muted
+							return lbl.Layout(gtx)
+						}
+						c, ok := st.splitClicks[p.pid]
+						if !ok {
+							c = &widget.Clickable{}
+							st.splitClicks[p.pid] = c
+						}
+						label := "✕"
+						col := pal.muted
+						if t, armed := st.splitArmed[p.pid]; armed && time.Since(t) < 5*time.Second {
+							label = "Confirm?"
+							col = pal.errFg
+						}
+						return boxedInline(gtx, th, c, pal, unit.Sp(13), label, col)
+					}),
+				)
+			})
+		})
 	})
 }
 
