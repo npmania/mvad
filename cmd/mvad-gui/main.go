@@ -224,6 +224,7 @@ type state struct {
 	signupOut  string
 
 	viaEntry widget.Editor
+	multihop widget.Bool
 
 	acctRefresh    widget.Clickable
 	acctRefreshing bool
@@ -236,30 +237,31 @@ type state struct {
 	deviceArmed    map[string]time.Time
 	deviceRemoving string
 
-	splitList       widget.List
-	splitRefresh    widget.Clickable
-	addPID          widget.Editor
-	runCmdEd        widget.Editor
-	runBtn          widget.Clickable
-	clearBtn        widget.Clickable
-	clearArmed      time.Time
-	splitPIDs       []splitPID
-	splitProcs      []splitPID
-	splitErr        error
-	splitLoading    bool
-	splitLoaded     bool
-	splitClicks     map[int]*widget.Clickable
-	splitArmed      map[int]time.Time
-	splitRemoving   int
-	runStarting     []string
-	procFilter      widget.Editor
-	procList        widget.List
-	procAddClicks   map[int]*widget.Clickable
-	appClicks       map[string]*widget.Clickable
-	appRemoveClicks map[string]*widget.Clickable
-	addAppEd        widget.Editor
-	splitAdvOpen    bool
-	splitAdvToggle  widget.Clickable
+	splitList        widget.List
+	splitRefresh     widget.Clickable
+	addPID           widget.Editor
+	runCmdEd         widget.Editor
+	runBtn           widget.Clickable
+	clearBtn         widget.Clickable
+	clearArmed       time.Time
+	splitPIDs        []splitPID
+	splitProcs       []splitPID
+	splitErr         error
+	splitLoading     bool
+	splitLoaded      bool
+	splitFirstLoaded bool
+	splitClicks      map[int]*widget.Clickable
+	splitArmed       map[int]time.Time
+	splitRemoving    int
+	runStarting      []string
+	procFilter       widget.Editor
+	procList         widget.List
+	procAddClicks    map[int]*widget.Clickable
+	appClicks        map[string]*widget.Clickable
+	appRemoveClicks  map[string]*widget.Clickable
+	addAppEd         widget.Editor
+	splitAdvOpen     bool
+	splitAdvToggle   widget.Clickable
 
 	favClicks     map[string]*widget.Clickable
 	tr            tray
@@ -696,6 +698,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 				st.splitProcs = nil
 			} else {
 				st.splitErr = nil
+				st.splitFirstLoaded = true
 				st.splitPIDs = r.pids
 				st.splitProcs = r.procs
 				keep := make(map[int]bool, len(st.splitPIDs))
@@ -1017,6 +1020,9 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 			if st.closeToTray.Update(gtx) {
 				st.cfg.NoCloseToTray = !st.closeToTray.Value
 				_ = st.cfg.Save()
+			}
+			if st.multihop.Update(gtx) && !st.multihop.Value {
+				st.viaEntry.SetText("")
 			}
 			if st.lockdownOn.Update(gtx) {
 				if st.running || st.snap.Up {
@@ -1405,7 +1411,15 @@ func disconnectedBody(gtx layout.Context, th *material.Theme, st *state, pal pal
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return splitEditor(gtx, th, &st.viaEntry, pal, "Multihop entry (optional)")
+			return settingsRow(gtx, th, pal, "Multihop", "", &st.multihop)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if !st.multihop.Value {
+				return layout.Dimensions{}
+			}
+			return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return boxedEditor(gtx, th, &st.viaEntry, pal, "entry hostname or country/city code")
+			})
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -1733,7 +1747,7 @@ func accountInfoRows(th *material.Theme, st *state, pal palette) []layout.FlexCh
 						rows = append(rows,
 							layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								lbl := material.Label(th, unit.Sp(13), "device  "+cfg.DeviceName)
+								lbl := material.Label(th, unit.Sp(12), "device  "+cfg.DeviceName)
 								lbl.Color = pal.muted
 								return lbl.Layout(gtx)
 							}),
@@ -1774,12 +1788,7 @@ func accountInfoRows(th *material.Theme, st *state, pal palette) []layout.FlexCh
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return st.openAcct.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				pointer.CursorPointer.Add(gtx.Ops)
-				lbl := material.Label(th, unit.Sp(14), "Open account page ↗")
-				lbl.Color = pal.accent
-				return lbl.Layout(gtx)
-			})
+			return inlineAction(gtx, th, &st.openAcct, unit.Sp(14), "Open account page ↗", pal.accent)
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -1853,12 +1862,7 @@ func accountSignInRows(th *material.Theme, st *state, pal palette) []layout.Flex
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(24)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return st.openAcct.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				pointer.CursorPointer.Add(gtx.Ops)
-				lbl := material.Label(th, unit.Sp(14), "Open account page ↗")
-				lbl.Color = pal.accent
-				return lbl.Layout(gtx)
-			})
+			return inlineAction(gtx, th, &st.openAcct, unit.Sp(14), "Open account page ↗", pal.accent)
 		}),
 	)
 	return children
@@ -1891,9 +1895,7 @@ func devicesSection(th *material.Theme, st *state, pal palette) []layout.FlexChi
 		}
 	case st.devicesErr == "":
 		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			lbl := material.Label(th, unit.Sp(13), "loading…")
-			lbl.Color = pal.muted
-			return lbl.Layout(gtx)
+			return centerLabel(gtx, th, pal.muted, "loading…")
 		}))
 	}
 	if st.devicesErr != "" {
@@ -1942,17 +1944,12 @@ func deviceRow(gtx layout.Context, th *material.Theme, st *state, pal palette, d
 					st.deviceClicks[d.ID] = c
 				}
 				label := "remove"
-				col := pal.fg
+				col := pal.accent
 				if t, armed := st.deviceArmed[d.ID]; armed && time.Since(t) < 5*time.Second {
 					label = "Confirm?"
 					col = pal.errFg
 				}
-				return c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					pointer.CursorPointer.Add(gtx.Ops)
-					lbl := material.Label(th, unit.Sp(13), label)
-					lbl.Color = col
-					return lbl.Layout(gtx)
-				})
+				return inlineAction(gtx, th, c, unit.Sp(13), label, col)
 			}),
 		)
 	})
@@ -2086,9 +2083,27 @@ func relayListArea(gtx layout.Context, th *material.Theme, st *state, pal palett
 
 func centerLabel(gtx layout.Context, th *material.Theme, c color.NRGBA, txt string) layout.Dimensions {
 	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		lbl := material.Label(th, unit.Sp(13), txt)
+		lbl := material.Label(th, unit.Sp(12), txt)
 		lbl.Color = c
 		return lbl.Layout(gtx)
+	})
+}
+
+func inlineAction(gtx layout.Context, th *material.Theme, clk *widget.Clickable,
+	sz unit.Sp, label string, col color.NRGBA) layout.Dimensions {
+	return clk.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		pointer.CursorPointer.Add(gtx.Ops)
+		macro := op.Record(gtx.Ops)
+		lbl := material.Label(th, sz, label)
+		lbl.Color = col
+		dims := lbl.Layout(gtx)
+		call := macro.Stop()
+		call.Add(gtx.Ops)
+		if clk.Hovered() {
+			bar := image.Rect(0, dims.Size.Y-gtx.Dp(1), dims.Size.X, dims.Size.Y)
+			paint.FillShape(gtx.Ops, col, clip.Rect(bar).Op())
+		}
+		return dims
 	})
 }
 
@@ -2102,7 +2117,7 @@ func errorPlaceholder(gtx layout.Context, th *material.Theme, pal palette, msg s
 			}),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				lbl := material.Label(th, unit.Sp(13), "press ↻ to retry")
+				lbl := material.Label(th, unit.Sp(12), "press ↻ to retry")
 				lbl.Color = pal.muted
 				return lbl.Layout(gtx)
 			}),
@@ -2243,12 +2258,7 @@ func reconnectLink(gtx layout.Context, th *material.Theme, st *state, pal palett
 	}
 	return layout.Inset{Top: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			return st.reconnect.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				pointer.CursorPointer.Add(gtx.Ops)
-				lbl := material.Label(th, unit.Sp(13), label)
-				lbl.Color = pal.fg
-				return lbl.Layout(gtx)
-			})
+			return inlineAction(gtx, th, &st.reconnect, unit.Sp(13), label, pal.accent)
 		})
 	})
 }
@@ -2567,12 +2577,10 @@ func viaArg(st *state) (string, error) {
 	if v == "" {
 		return "", nil
 	}
-	for i := range st.relays {
-		if st.relays[i].Hostname == v {
-			return "--via=" + v, nil
-		}
+	if _, err := mullvad.Pick(st.relays, v); err != nil {
+		return "", fmt.Errorf("multihop entry not found: %s", v)
 	}
-	return "", fmt.Errorf("multihop entry not found: %s", v)
+	return "--via=" + v, nil
 }
 
 func addFavorite(st *state, tr tray, relay string) {
@@ -3004,12 +3012,10 @@ func appShortcutBtn(gtx layout.Context, th *material.Theme, st *state, pal palet
 
 func splitActiveBlock(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
 	if len(st.splitPIDs) == 0 && len(st.runStarting) == 0 {
-		if st.splitLoading {
+		if st.splitLoading && !st.splitFirstLoaded {
 			return centerLabel(gtx, th, pal.muted, "loading…")
 		}
-		lbl := material.Label(th, unit.Sp(13), "none")
-		lbl.Color = pal.muted
-		return lbl.Layout(gtx)
+		return centerLabel(gtx, th, pal.muted, "none")
 	}
 	children := make([]layout.FlexChild, 0, len(st.splitPIDs)+len(st.runStarting))
 	for _, p := range st.splitPIDs {
@@ -3091,12 +3097,7 @@ func splitAdvancedToggle(gtx layout.Context, th *material.Theme, st *state, pal 
 	if st.splitAdvOpen {
 		glyph = "▴"
 	}
-	return st.splitAdvToggle.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		pointer.CursorPointer.Add(gtx.Ops)
-		lbl := material.Label(th, unit.Sp(13), "Advanced "+glyph)
-		lbl.Color = pal.muted
-		return lbl.Layout(gtx)
-	})
+	return inlineAction(gtx, th, &st.splitAdvToggle, unit.Sp(13), "Advanced "+glyph, pal.accent)
 }
 
 func splitAdvancedBlock(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
@@ -3240,12 +3241,32 @@ func splitErrorPlaceholder(gtx layout.Context, th *material.Theme, pal palette, 
 			}),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				lbl := material.Label(th, unit.Sp(13), "press ↻ to retry")
+				lbl := material.Label(th, unit.Sp(12), "press ↻ to retry")
 				lbl.Color = pal.muted
 				return lbl.Layout(gtx)
 			}),
 		)
 	})
+}
+
+func boxedEditor(gtx layout.Context, th *material.Theme, ed *widget.Editor,
+	pal palette, hint string) layout.Dimensions {
+	macro := op.Record(gtx.Ops)
+	dims := layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		gtx.Constraints.Min.X = gtx.Constraints.Max.X
+		es := material.Editor(th, ed, hint)
+		es.Color, es.HintColor = pal.fg, pal.muted
+		return es.Layout(gtx)
+	})
+	call := macro.Stop()
+	border := pal.dim
+	if gtx.Focused(ed) {
+		border = pal.accent
+	}
+	rr := clip.UniformRRect(image.Rectangle{Max: dims.Size}, gtx.Dp(4))
+	paint.FillShape(gtx.Ops, border, clip.Stroke{Path: rr.Path(gtx.Ops), Width: float32(max(gtx.Dp(1), 1))}.Op())
+	call.Add(gtx.Ops)
+	return dims
 }
 
 func splitEditor(gtx layout.Context, th *material.Theme, ed *widget.Editor, pal palette, label string) layout.Dimensions {
@@ -3319,13 +3340,10 @@ func splitRunBlock(gtx layout.Context, th *material.Theme, st *state, pal palett
 
 func splitClearLink(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
 	label := "Clear all"
+	col := pal.accent
 	if !st.clearArmed.IsZero() && time.Since(st.clearArmed) < 5*time.Second {
 		label = "Confirm?"
+		col = pal.errFg
 	}
-	return st.clearBtn.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		pointer.CursorPointer.Add(gtx.Ops)
-		lbl := material.Label(th, unit.Sp(13), label)
-		lbl.Color = pal.fg
-		return lbl.Layout(gtx)
-	})
+	return inlineAction(gtx, th, &st.clearBtn, unit.Sp(13), label, col)
 }
