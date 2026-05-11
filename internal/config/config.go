@@ -37,6 +37,7 @@ type Config struct {
 	NoCloseToTray     bool            `json:"no_close_to_tray,omitempty"`
 	Dark              bool            `json:"dark,omitempty"`
 	DarkSet           bool            `json:"dark_set,omitempty"`
+	SplitOtherOpen    bool            `json:"split_other_open,omitempty"`
 	Favorites         []string        `json:"favorites,omitempty"`
 	SplitApps         []string        `json:"split_apps,omitempty"`
 }
