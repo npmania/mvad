@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"os/user"
 	"strconv"
-	"strings"
 	"syscall"
 
 	"github.com/npmania/mvad/internal/config"
@@ -61,11 +60,7 @@ func runCmd(args []string) error {
 }
 
 func readInvokerEnv() []string {
-	inv, err := parentPID(os.Getppid())
-	if err != nil {
-		return nil
-	}
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", inv))
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", os.Getppid()))
 	if err != nil {
 		return nil
 	}
@@ -77,22 +72,6 @@ func readInvokerEnv() []string {
 		env = append(env, string(p))
 	}
 	return env
-}
-
-func parentPID(pid int) (int, error) {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	if err != nil {
-		return 0, err
-	}
-	rp := bytes.LastIndexByte(data, ')')
-	if rp < 0 {
-		return 0, fmt.Errorf("stat %d: no comm end", pid)
-	}
-	fields := strings.Fields(string(data[rp+1:]))
-	if len(fields) < 2 {
-		return 0, fmt.Errorf("stat %d: short", pid)
-	}
-	return strconv.Atoi(fields[1])
 }
 
 // dropPrivs drops to the user who invoked mvad via sudo or pkexec.
