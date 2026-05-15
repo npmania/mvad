@@ -21,7 +21,7 @@ type state struct {
 	Dev     string     `json:"dev"`
 }
 
-func up(gw netip.Addr, dev string) error {
+func up(gw netip.Addr, dev string, viaTunnel []netip.Addr) error {
 	if !cgroupV2Mounted() {
 		return errors.New("split: cgroup v2 unified hierarchy not mounted at /sys/fs/cgroup")
 	}
@@ -37,7 +37,7 @@ func up(gw netip.Addr, dev string) error {
 	if err := saveState(state{Gateway: gw, Dev: dev}); err != nil {
 		return err
 	}
-	if err := runNft(buildScript()); err != nil {
+	if err := runNft(buildScript(viaTunnel)); err != nil {
 		_ = removeState()
 		return fmt.Errorf("split: install nft: %w", err)
 	}
@@ -248,13 +248,20 @@ func notFound(err error) bool {
 		strings.Contains(s, "does not exist")
 }
 
-func buildScript() string {
+func buildScript(viaTunnel []netip.Addr) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "add table inet %s\n", tableName)
 	fmt.Fprintf(&b, "delete table inet %s\n", tableName)
 	fmt.Fprintf(&b, "table inet %s {\n", tableName)
 	b.WriteString("\tchain output {\n")
 	b.WriteString("\t\ttype route hook output priority -150;\n")
+	for _, a := range viaTunnel {
+		fam := "ip"
+		if a.Is6() {
+			fam = "ip6"
+		}
+		fmt.Fprintf(&b, "\t\t%s daddr %s return\n", fam, a)
+	}
 	fmt.Fprintf(&b, "\t\tsocket cgroupv2 level 1 %q meta mark set %#x\n", cgroupName, fwmark)
 	b.WriteString("\t}\n")
 	b.WriteString("}\n")

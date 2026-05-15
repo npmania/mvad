@@ -23,13 +23,15 @@ var (
 	ErrUnavailable = errors.New("split-tunnel inactive")
 )
 
-func Up(gw netip.Addr, dev string) error { return up(gw, dev) }
-func Down() error                        { return down() }
-func AddPID(pid int) error               { return addPID(pid) }
-func RmPID(pid int) error                { return rmPID(pid) }
-func ListPIDs() ([]int, error)           { return listPIDs() }
-func Clear() error                       { return clear() }
-func Available() bool                    { return available() }
+func Up(gw netip.Addr, dev string, viaTunnel []netip.Addr) error {
+	return up(gw, dev, viaTunnel)
+}
+func Down() error              { return down() }
+func AddPID(pid int) error     { return addPID(pid) }
+func RmPID(pid int) error      { return rmPID(pid) }
+func ListPIDs() ([]int, error) { return listPIDs() }
+func Clear() error             { return clear() }
+func Available() bool          { return available() }
 
 const (
 	CgroupDir = cgroupDir

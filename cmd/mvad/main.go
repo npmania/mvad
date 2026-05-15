@@ -912,7 +912,7 @@ func doConnect(opts connectOpts) (retErr error) {
 	}
 	if gwErr != nil {
 		fmt.Fprintf(os.Stderr, "mvad: split-tunnel setup skipped: %v; running without split-tunnel\n", gwErr)
-	} else if err := split.Up(gw, dev); err != nil {
+	} else if err := split.Up(gw, dev, mullvadDNS); err != nil {
 		fmt.Fprintf(os.Stderr, "mvad: split-tunnel setup failed: %v; running without split-tunnel\n", err)
 	}
 	return nil
