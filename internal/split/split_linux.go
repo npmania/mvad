@@ -37,7 +37,7 @@ func up(gw netip.Addr, dev string, viaTunnel []netip.Addr) error {
 	if err := saveState(state{Gateway: gw, Dev: dev}); err != nil {
 		return err
 	}
-	if err := runNft(buildScript(viaTunnel)); err != nil {
+	if err := runNft(buildScript(viaTunnel, dev)); err != nil {
 		_ = removeState()
 		return fmt.Errorf("split: install nft: %w", err)
 	}
@@ -201,7 +201,7 @@ func runNft(script string) error {
 }
 
 func nftDel() error {
-	err := run("nft", "delete", "table", "inet", tableName)
+	err := run("nft", "delete", "table", "ip", tableName)
 	if err == nil || notFound(err) {
 		return nil
 	}
@@ -248,21 +248,28 @@ func notFound(err error) bool {
 		strings.Contains(s, "does not exist")
 }
 
-func buildScript(viaTunnel []netip.Addr) string {
+func buildScript(viaTunnel []netip.Addr, dev string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "add table inet %s\n", tableName)
-	fmt.Fprintf(&b, "delete table inet %s\n", tableName)
-	fmt.Fprintf(&b, "table inet %s {\n", tableName)
+	// ip family because nftables nat chains aren't supported in inet.
+	// Split-tunnel only re-routes IPv4 anyway (no v6 fwmark rule).
+	fmt.Fprintf(&b, "add table ip %s\n", tableName)
+	fmt.Fprintf(&b, "delete table ip %s\n", tableName)
+	fmt.Fprintf(&b, "table ip %s {\n", tableName)
 	b.WriteString("\tchain output {\n")
 	b.WriteString("\t\ttype route hook output priority -150;\n")
 	for _, a := range viaTunnel {
-		fam := "ip"
-		if a.Is6() {
-			fam = "ip6"
+		if !a.Is4() {
+			continue
 		}
-		fmt.Fprintf(&b, "\t\t%s daddr %s return\n", fam, a)
+		fmt.Fprintf(&b, "\t\tip daddr %s return\n", a)
 	}
 	fmt.Fprintf(&b, "\t\tsocket cgroupv2 level 1 %q meta mark set %#x\n", cgroupName, fwmark)
+	b.WriteString("\t}\n")
+	// Marked packets keep the wg interface's source IP after re-routing,
+	// so replies can't return. Masquerade to the physical interface.
+	b.WriteString("\tchain postrouting {\n")
+	b.WriteString("\t\ttype nat hook postrouting priority srcnat;\n")
+	fmt.Fprintf(&b, "\t\tmeta mark %#x oifname %q masquerade\n", fwmark, dev)
 	b.WriteString("\t}\n")
 	b.WriteString("}\n")
 	return b.String()

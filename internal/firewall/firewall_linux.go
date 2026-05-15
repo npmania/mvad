@@ -69,6 +69,10 @@ func buildScript(c Config) string {
 
 	fmt.Fprintf(&b, "\tchain output {\n")
 	b.WriteString("\t\ttype filter hook output priority 0; policy drop;\n")
+	// Split-tunnel packets are still routed via the wg interface at this
+	// point; re-routing happens after the chain. Save ct mark before the
+	// wg accept terminates the chain so replies can be matched on input.
+	fmt.Fprintf(&b, "\t\tmeta mark %#x ct mark set %#x\n", split.FWMark, split.FWMark)
 	b.WriteString("\t\toifname \"lo\" accept\n")
 	fmt.Fprintf(&b, "\t\toifname %q accept\n", c.Iface)
 	fmt.Fprintf(&b, "\t\t%s dport %d %s daddr %s accept\n", proto, port, relayFam, relay)
@@ -83,7 +87,7 @@ func buildScript(c Config) string {
 	if c.AllowLAN {
 		b.WriteString("\t\tip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } accept\n")
 	}
-	fmt.Fprintf(&b, "\t\tmeta mark %#x ct mark set meta mark accept\n", split.FWMark)
+	fmt.Fprintf(&b, "\t\tmeta mark %#x accept\n", split.FWMark)
 	b.WriteString("\t}\n")
 
 	fmt.Fprintf(&b, "\tchain input {\n")
