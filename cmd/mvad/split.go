@@ -3,12 +3,14 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/user"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/npmania/mvad/internal/config"
@@ -39,13 +41,58 @@ func runCmd(args []string) error {
 	if err != nil {
 		return fmt.Errorf("run: %w", err)
 	}
+	// pkexec scrubs DISPLAY, DBUS_SESSION_BUS_ADDRESS, etc.; restore them
+	// from the invoking process so the child reaches the user's session.
+	var invokerEnv []string
+	if os.Getenv("PKEXEC_UID") != "" {
+		invokerEnv = readInvokerEnv()
+	}
 	if err := split.AddPID(os.Getpid()); err != nil {
 		return err
 	}
 	if err := dropPrivs(); err != nil {
 		return err
 	}
-	return syscall.Exec(bin, args, os.Environ())
+	env := os.Environ()
+	if invokerEnv != nil {
+		env = invokerEnv
+	}
+	return syscall.Exec(bin, args, env)
+}
+
+func readInvokerEnv() []string {
+	inv, err := parentPID(os.Getppid())
+	if err != nil {
+		return nil
+	}
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", inv))
+	if err != nil {
+		return nil
+	}
+	var env []string
+	for p := range bytes.SplitSeq(data, []byte{0}) {
+		if len(p) == 0 {
+			continue
+		}
+		env = append(env, string(p))
+	}
+	return env
+}
+
+func parentPID(pid int) (int, error) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return 0, err
+	}
+	rp := bytes.LastIndexByte(data, ')')
+	if rp < 0 {
+		return 0, fmt.Errorf("stat %d: no comm end", pid)
+	}
+	fields := strings.Fields(string(data[rp+1:]))
+	if len(fields) < 2 {
+		return 0, fmt.Errorf("stat %d: short", pid)
+	}
+	return strconv.Atoi(fields[1])
 }
 
 // dropPrivs drops to the user who invoked mvad via sudo or pkexec.
