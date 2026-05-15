@@ -31,4 +31,7 @@ func ListPIDs() ([]int, error)           { return listPIDs() }
 func Clear() error                       { return clear() }
 func Available() bool                    { return available() }
 
-const CgroupDir = cgroupDir
+const (
+	CgroupDir = cgroupDir
+	FWMark    = fwmark
+)

@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/npmania/mvad/internal/split"
 )
 
 const tableName = "mvad"
@@ -81,6 +83,7 @@ func buildScript(c Config) string {
 	if c.AllowLAN {
 		b.WriteString("\t\tip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } accept\n")
 	}
+	fmt.Fprintf(&b, "\t\tmeta mark %#x ct mark set meta mark accept\n", split.FWMark)
 	b.WriteString("\t}\n")
 
 	fmt.Fprintf(&b, "\tchain input {\n")
@@ -91,6 +94,7 @@ func buildScript(c Config) string {
 	if c.AllowLAN {
 		b.WriteString("\t\tip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } accept\n")
 	}
+	fmt.Fprintf(&b, "\t\tct mark %#x accept\n", split.FWMark)
 	b.WriteString("\t}\n")
 
 	b.WriteString("}\n")
