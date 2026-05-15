@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"strconv"
 	"syscall"
 
+	"github.com/npmania/mvad/internal/config"
 	"github.com/npmania/mvad/internal/split"
 )
 
@@ -40,7 +42,51 @@ func runCmd(args []string) error {
 	if err := split.AddPID(os.Getpid()); err != nil {
 		return err
 	}
+	if err := dropPrivs(); err != nil {
+		return err
+	}
 	return syscall.Exec(bin, args, os.Environ())
+}
+
+// dropPrivs drops to the user who invoked mvad via sudo or pkexec.
+// A no-op when mvad was launched directly as root.
+func dropPrivs() error {
+	cu, err := config.ResolveCallingUser()
+	if err != nil || cu == nil {
+		return err
+	}
+	u, err := user.LookupId(strconv.Itoa(cu.UID))
+	if err != nil {
+		return err
+	}
+	ids, err := u.GroupIds()
+	if err != nil {
+		return err
+	}
+	gids := make([]int, len(ids))
+	for i, s := range ids {
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			return err
+		}
+		gids[i] = n
+	}
+	if err := syscall.Setgroups(gids); err != nil {
+		return err
+	}
+	if err := syscall.Setgid(cu.GID); err != nil {
+		return err
+	}
+	if err := syscall.Setuid(cu.UID); err != nil {
+		return err
+	}
+	for _, k := range []string{"SUDO_USER", "SUDO_UID", "SUDO_GID", "SUDO_COMMAND", "PKEXEC_UID"} {
+		os.Unsetenv(k)
+	}
+	os.Setenv("HOME", cu.Home)
+	os.Setenv("USER", u.Username)
+	os.Setenv("LOGNAME", u.Username)
+	return nil
 }
 
 func splitCmd(args []string) error {
