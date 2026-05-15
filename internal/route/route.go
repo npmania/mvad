@@ -13,3 +13,6 @@ func Unset(iface string, endpoint netip.Addr) error { return unset(iface, endpoi
 
 // Default returns the gateway and device of the IPv4 default route.
 func Default() (netip.Addr, string, error) { return defaultRoute() }
+
+// Default6 returns the gateway and device of the IPv6 default route.
+func Default6() (netip.Addr, string, error) { return defaultRoute6() }

@@ -17,15 +17,16 @@ import (
 )
 
 type state struct {
-	Gateway netip.Addr `json:"gateway"`
-	Dev     string     `json:"dev"`
+	Gateway  netip.Addr `json:"gateway"`
+	Gateway6 netip.Addr `json:"gateway6"`
+	Dev      string     `json:"dev"`
 }
 
-func up(gw netip.Addr, dev string, viaTunnel []netip.Addr) error {
+func up(gw4, gw6 netip.Addr, dev string, viaTunnel []netip.Addr) error {
 	if !cgroupV2Mounted() {
 		return errors.New("split: cgroup v2 unified hierarchy not mounted at /sys/fs/cgroup")
 	}
-	if !gw.IsValid() {
+	if !gw4.IsValid() {
 		return errors.New("split: invalid gateway")
 	}
 	if dev == "" {
@@ -34,14 +35,14 @@ func up(gw netip.Addr, dev string, viaTunnel []netip.Addr) error {
 	if err := os.MkdirAll(cgroupDir, 0755); err != nil {
 		return fmt.Errorf("split: mkdir %s: %w", cgroupDir, err)
 	}
-	if err := saveState(state{Gateway: gw, Dev: dev}); err != nil {
+	if err := saveState(state{Gateway: gw4, Gateway6: gw6, Dev: dev}); err != nil {
 		return err
 	}
 	if err := runNft(buildScript(viaTunnel, dev)); err != nil {
 		_ = removeState()
 		return fmt.Errorf("split: install nft: %w", err)
 	}
-	if err := installRoutes(gw, dev); err != nil {
+	if err := installRoutes(gw4, gw6, dev); err != nil {
 		_ = nftDel()
 		_ = removeState()
 		return err
@@ -201,23 +202,43 @@ func runNft(script string) error {
 }
 
 func nftDel() error {
-	err := run("nft", "delete", "table", "ip", tableName)
-	if err == nil || notFound(err) {
-		return nil
+	var errs []error
+	for _, fam := range []string{"ip", "ip6"} {
+		err := run("nft", "delete", "table", fam, tableName)
+		if err != nil && !notFound(err) {
+			errs = append(errs, err)
+		}
 	}
-	return err
+	return errors.Join(errs...)
 }
 
-func installRoutes(gw netip.Addr, dev string) error {
+func installRoutes(gw4, gw6 netip.Addr, dev string) error {
 	mark := fmt.Sprintf("%#x", fwmark)
 	tbl := strconv.Itoa(routeTable)
 	pri := strconv.Itoa(rulePri)
-	if err := run("ip", "rule", "add", "fwmark", mark, "lookup", tbl, "priority", pri); err != nil {
-		return fmt.Errorf("split: ip rule add: %w", err)
+	for _, fam := range []string{"-4", "-6"} {
+		if err := run("ip", fam, "rule", "add", "fwmark", mark, "lookup", tbl, "priority", pri); err != nil {
+			_ = delRule()
+			return fmt.Errorf("split: ip %s rule add: %w", fam, err)
+		}
 	}
-	if err := run("ip", "route", "replace", "default", "via", gw.String(), "dev", dev, "table", tbl); err != nil {
+	if err := run("ip", "-4", "route", "replace", "default", "via", gw4.String(), "dev", dev, "table", tbl); err != nil {
 		_ = delRule()
-		return fmt.Errorf("split: ip route replace: %w", err)
+		return fmt.Errorf("split: ip -4 route replace: %w", err)
+	}
+	// Without a v6 default in table 60, marked v6 packets fall through
+	// to the main table (the tunnel). Install an unreachable route so
+	// the lookup terminates and apps fall back to v4.
+	var args []string
+	if gw6.IsValid() {
+		args = []string{"-6", "route", "replace", "default", "via", gw6.String(), "dev", dev, "table", tbl}
+	} else {
+		args = []string{"-6", "route", "replace", "unreachable", "default", "table", tbl}
+	}
+	if err := run("ip", args...); err != nil {
+		_ = delRule()
+		_ = delRoute()
+		return fmt.Errorf("split: ip -6 route: %w", err)
 	}
 	return nil
 }
@@ -226,19 +247,25 @@ func delRule() error {
 	mark := fmt.Sprintf("%#x", fwmark)
 	tbl := strconv.Itoa(routeTable)
 	pri := strconv.Itoa(rulePri)
-	err := run("ip", "rule", "del", "fwmark", mark, "lookup", tbl, "priority", pri)
-	if err == nil || notFound(err) {
-		return nil
+	var errs []error
+	for _, fam := range []string{"-4", "-6"} {
+		err := run("ip", fam, "rule", "del", "fwmark", mark, "lookup", tbl, "priority", pri)
+		if err != nil && !notFound(err) {
+			errs = append(errs, err)
+		}
 	}
-	return err
+	return errors.Join(errs...)
 }
 
 func delRoute() error {
-	err := run("ip", "route", "flush", "table", strconv.Itoa(routeTable))
-	if err == nil || notFound(err) {
-		return nil
+	var errs []error
+	for _, fam := range []string{"-4", "-6"} {
+		err := run("ip", fam, "route", "flush", "table", strconv.Itoa(routeTable))
+		if err != nil && !notFound(err) {
+			errs = append(errs, err)
+		}
 	}
-	return err
+	return errors.Join(errs...)
 }
 
 func notFound(err error) bool {
@@ -250,27 +277,30 @@ func notFound(err error) bool {
 
 func buildScript(viaTunnel []netip.Addr, dev string) string {
 	var b strings.Builder
-	// ip family because nftables nat chains aren't supported in inet.
-	// Split-tunnel only re-routes IPv4 anyway (no v6 fwmark rule).
-	fmt.Fprintf(&b, "add table ip %s\n", tableName)
-	fmt.Fprintf(&b, "delete table ip %s\n", tableName)
-	fmt.Fprintf(&b, "table ip %s {\n", tableName)
-	b.WriteString("\tchain output {\n")
-	b.WriteString("\t\ttype route hook output priority -150;\n")
-	for _, a := range viaTunnel {
-		if !a.Is4() {
-			continue
+	// Separate ip and ip6 tables because nftables nat chains aren't
+	// supported in the inet family.
+	for _, fam := range []string{"ip", "ip6"} {
+		v6 := fam == "ip6"
+		fmt.Fprintf(&b, "add table %s %s\n", fam, tableName)
+		fmt.Fprintf(&b, "delete table %s %s\n", fam, tableName)
+		fmt.Fprintf(&b, "table %s %s {\n", fam, tableName)
+		b.WriteString("\tchain output {\n")
+		b.WriteString("\t\ttype route hook output priority -150;\n")
+		for _, a := range viaTunnel {
+			if a.Is6() != v6 {
+				continue
+			}
+			fmt.Fprintf(&b, "\t\t%s daddr %s return\n", fam, a)
 		}
-		fmt.Fprintf(&b, "\t\tip daddr %s return\n", a)
+		fmt.Fprintf(&b, "\t\tsocket cgroupv2 level 1 %q meta mark set %#x\n", cgroupName, fwmark)
+		b.WriteString("\t}\n")
+		// Marked packets keep the wg interface's source IP after re-routing,
+		// so replies can't return. Masquerade to the physical interface.
+		b.WriteString("\tchain postrouting {\n")
+		b.WriteString("\t\ttype nat hook postrouting priority srcnat;\n")
+		fmt.Fprintf(&b, "\t\tmeta mark %#x oifname %q masquerade\n", fwmark, dev)
+		b.WriteString("\t}\n")
+		b.WriteString("}\n")
 	}
-	fmt.Fprintf(&b, "\t\tsocket cgroupv2 level 1 %q meta mark set %#x\n", cgroupName, fwmark)
-	b.WriteString("\t}\n")
-	// Marked packets keep the wg interface's source IP after re-routing,
-	// so replies can't return. Masquerade to the physical interface.
-	b.WriteString("\tchain postrouting {\n")
-	b.WriteString("\t\ttype nat hook postrouting priority srcnat;\n")
-	fmt.Fprintf(&b, "\t\tmeta mark %#x oifname %q masquerade\n", fwmark, dev)
-	b.WriteString("\t}\n")
-	b.WriteString("}\n")
 	return b.String()
 }

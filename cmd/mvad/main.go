@@ -869,6 +869,10 @@ func doConnect(opts connectOpts) (retErr error) {
 		return fmt.Errorf("configure wireguard interface: %w (is the wireguard kernel module loaded?)", err)
 	}
 	gw, dev, gwErr := route.Default()
+	gw6, dev6, _ := route.Default6()
+	if dev6 != dev {
+		gw6 = netip.Addr{}
+	}
 	if err := route.Set(ifname, endpoint.Addr()); err != nil {
 		wg.Down(ifname)
 		return fmt.Errorf("set default route: %w", err)
@@ -912,7 +916,7 @@ func doConnect(opts connectOpts) (retErr error) {
 	}
 	if gwErr != nil {
 		fmt.Fprintf(os.Stderr, "mvad: split-tunnel setup skipped: %v; running without split-tunnel\n", gwErr)
-	} else if err := split.Up(gw, dev, mullvadDNS); err != nil {
+	} else if err := split.Up(gw, gw6, dev, mullvadDNS); err != nil {
 		fmt.Fprintf(os.Stderr, "mvad: split-tunnel setup failed: %v; running without split-tunnel\n", err)
 	}
 	return nil

@@ -4,7 +4,7 @@ package split
 
 import "net/netip"
 
-func up(netip.Addr, string, []netip.Addr) error { return ErrUnsupported }
+func up(netip.Addr, netip.Addr, string, []netip.Addr) error { return ErrUnsupported }
 func down() error                               { return ErrUnsupported }
 func addPID(int) error                          { return ErrUnsupported }
 func rmPID(int) error                           { return ErrUnsupported }

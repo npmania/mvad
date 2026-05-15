@@ -82,8 +82,11 @@ func hostPrefix(addr netip.Addr) string {
 	return addr.String() + "/128"
 }
 
-func defaultRoute() (netip.Addr, string, error) {
-	out, err := ipOutput("-j", "-4", "route", "show", "default")
+func defaultRoute() (netip.Addr, string, error)  { return defaultRouteFam("-4") }
+func defaultRoute6() (netip.Addr, string, error) { return defaultRouteFam("-6") }
+
+func defaultRouteFam(fam string) (netip.Addr, string, error) {
+	out, err := ipOutput("-j", fam, "route", "show", "default")
 	if err != nil {
 		return netip.Addr{}, "", err
 	}
@@ -92,7 +95,7 @@ func defaultRoute() (netip.Addr, string, error) {
 		Dev     string `json:"dev"`
 	}
 	if err := json.Unmarshal(out, &rs); err != nil {
-		return netip.Addr{}, "", fmt.Errorf("ip -j -4 route show default: %w", err)
+		return netip.Addr{}, "", fmt.Errorf("ip -j %s route show default: %w", fam, err)
 	}
 	for _, r := range rs {
 		if r.Gateway == "" || r.Dev == "" {
