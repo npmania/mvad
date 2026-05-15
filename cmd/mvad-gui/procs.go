@@ -32,16 +32,19 @@ func listUserProcs(uid int) []splitPID {
 	return out
 }
 
-func procUID(pid int) int {
+func procUID(pid int) int  { return procStatusInt(pid, "Uid:") }
+func procPPID(pid int) int { return procStatusInt(pid, "PPid:") }
+
+func procStatusInt(pid int, prefix string) int {
 	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "status"))
 	if err != nil {
 		return -1
 	}
 	for _, line := range strings.Split(string(data), "\n") {
-		if !strings.HasPrefix(line, "Uid:") {
+		if !strings.HasPrefix(line, prefix) {
 			continue
 		}
-		f := strings.Fields(line[4:])
+		f := strings.Fields(line[len(prefix):])
 		if len(f) == 0 {
 			return -1
 		}

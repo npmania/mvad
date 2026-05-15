@@ -155,6 +155,17 @@ type splitPID struct {
 	comm string
 }
 
+type splitGroup struct {
+	root    splitPID
+	members []splitPID
+}
+
+type splitGroupUI struct {
+	toggle, kill *widget.Clickable
+	armed        time.Time
+	open         bool
+}
+
 type state struct {
 	ctx context.Context
 
@@ -245,6 +256,8 @@ type state struct {
 	clearBtn           widget.Clickable
 	clearArmed         time.Time
 	splitPIDs          []splitPID
+	splitGroups        []splitGroup
+	splitGroupUI       map[int]*splitGroupUI
 	splitProcs         []splitPID
 	splitErr           error
 	splitLoading       bool
@@ -253,6 +266,7 @@ type state struct {
 	splitClicks        map[int]*widget.Clickable
 	splitArmed         map[int]time.Time
 	splitRemoving      int
+	splitRmQueue       []int
 	runStarting        []string
 	procFilter         widget.Editor
 	procList           widget.List
@@ -368,6 +382,7 @@ func main() {
 	st.deviceArmed = map[string]time.Time{}
 	st.splitClicks = map[int]*widget.Clickable{}
 	st.splitArmed = map[int]time.Time{}
+	st.splitGroupUI = map[int]*splitGroupUI{}
 	st.favClicks = map[string]*widget.Clickable{}
 	st.procAddClicks = map[int]*widget.Clickable{}
 	st.procGroupOpen = map[string]bool{}
@@ -720,10 +735,26 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 				st.splitErr = nil
 				st.splitFirstLoaded = true
 				st.splitPIDs = r.pids
+				st.splitGroups = r.groups
 				st.splitProcs = r.procs
 				keep := make(map[int]bool, len(st.splitPIDs))
 				for _, p := range st.splitPIDs {
 					keep[p.pid] = true
+				}
+				roots := make(map[int]bool, len(r.groups))
+				for _, g := range r.groups {
+					roots[g.root.pid] = true
+					if st.splitGroupUI[g.root.pid] == nil {
+						st.splitGroupUI[g.root.pid] = &splitGroupUI{
+							toggle: &widget.Clickable{},
+							kill:   &widget.Clickable{},
+						}
+					}
+				}
+				for _, p := range st.splitPIDs {
+					if st.splitClicks[p.pid] == nil {
+						st.splitClicks[p.pid] = &widget.Clickable{}
+					}
 				}
 				for pid := range st.splitClicks {
 					if !keep[pid] {
@@ -738,6 +769,11 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 				for pid := range st.pidRowHover {
 					if !keep[pid] {
 						delete(st.pidRowHover, pid)
+					}
+				}
+				for pid := range st.splitGroupUI {
+					if !roots[pid] {
+						delete(st.splitGroupUI, pid)
 					}
 				}
 				keepProc := make(map[int]bool, len(r.procs))
@@ -955,24 +991,13 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 			}
 			now := time.Now()
 			for _, p := range st.splitPIDs {
-				c, ok := st.splitClicks[p.pid]
-				if !ok {
-					c = &widget.Clickable{}
-					st.splitClicks[p.pid] = c
-				}
-				if !c.Clicked(gtx) {
+				c := st.splitClicks[p.pid]
+				if c == nil || !c.Clicked(gtx) {
 					continue
 				}
 				if t, armed := st.splitArmed[p.pid]; armed && now.Sub(t) < 5*time.Second {
 					delete(st.splitArmed, p.pid)
-					if !st.running {
-						st.cmdErr = nil
-						st.cmdOut = ""
-						st.running = true
-						st.runningName = "split-rm"
-						st.splitRemoving = p.pid
-						go runCmd(st.ctx, w, st.cmdDone, "split", "rm-pid", strconv.Itoa(p.pid))
-					}
+					st.splitRmQueue = append(st.splitRmQueue, p.pid)
 				} else {
 					st.splitArmed[p.pid] = now
 				}
@@ -981,6 +1006,44 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 				if now.Sub(t) >= 5*time.Second {
 					delete(st.splitArmed, pid)
 				}
+			}
+			for _, g := range st.splitGroups {
+				if len(g.members) < 2 {
+					continue
+				}
+				ui := st.splitGroupUI[g.root.pid]
+				if ui == nil {
+					continue
+				}
+				if ui.toggle.Clicked(gtx) {
+					ui.open = !ui.open
+				}
+				if !ui.kill.Clicked(gtx) {
+					continue
+				}
+				if !ui.armed.IsZero() && now.Sub(ui.armed) < 5*time.Second {
+					ui.armed = time.Time{}
+					for _, m := range g.members {
+						st.splitRmQueue = append(st.splitRmQueue, m.pid)
+					}
+				} else {
+					ui.armed = now
+				}
+			}
+			for _, ui := range st.splitGroupUI {
+				if !ui.armed.IsZero() && now.Sub(ui.armed) >= 5*time.Second {
+					ui.armed = time.Time{}
+				}
+			}
+			if !st.running && len(st.splitRmQueue) > 0 {
+				pid := st.splitRmQueue[0]
+				st.splitRmQueue = st.splitRmQueue[1:]
+				st.cmdErr = nil
+				st.cmdOut = ""
+				st.running = true
+				st.runningName = "split-rm"
+				st.splitRemoving = pid
+				go runCmd(st.ctx, w, st.cmdDone, "split", "rm-pid", strconv.Itoa(pid))
 			}
 			if len(st.runStarting) == 0 {
 				for _, name := range availableApps(st) {
@@ -2876,9 +2939,10 @@ func removeDevice(ctx context.Context, w *app.Window, done chan<- deviceRemoveRe
 }
 
 type splitLoadResult struct {
-	pids  []splitPID
-	procs []splitPID
-	err   error
+	pids   []splitPID
+	groups []splitGroup
+	procs  []splitPID
+	err    error
 }
 
 type runResult struct {
@@ -2900,6 +2964,7 @@ func loadSplit(ctx context.Context, w *app.Window, done chan<- splitLoadResult) 
 		for _, p := range res.pids {
 			in[p.pid] = true
 		}
+		res.groups = groupByTree(res.pids, in)
 		for _, p := range listUserProcs(os.Getuid()) {
 			if !in[p.pid] {
 				res.procs = append(res.procs, p)
@@ -2925,6 +2990,48 @@ func readComm(pid int) string {
 		return "(gone)"
 	}
 	return strings.TrimSpace(string(data))
+}
+
+func groupByTree(pids []splitPID, in map[int]bool) []splitGroup {
+	rootOf := make(map[int]int, len(pids))
+	for _, p := range pids {
+		r := p.pid
+		for {
+			pp := procPPID(r)
+			if pp <= 1 || !in[pp] {
+				break
+			}
+			r = pp
+		}
+		rootOf[p.pid] = r
+	}
+	tails := map[int][]splitPID{}
+	var roots []splitPID
+	for _, p := range pids {
+		if rootOf[p.pid] == p.pid {
+			roots = append(roots, p)
+		} else {
+			tails[rootOf[p.pid]] = append(tails[rootOf[p.pid]], p)
+		}
+	}
+	sort.Slice(roots, func(i, j int) bool {
+		if roots[i].comm != roots[j].comm {
+			return roots[i].comm < roots[j].comm
+		}
+		return roots[i].pid < roots[j].pid
+	})
+	out := make([]splitGroup, 0, len(roots))
+	for _, root := range roots {
+		tail := tails[root.pid]
+		sort.Slice(tail, func(i, j int) bool {
+			if tail[i].comm != tail[j].comm {
+				return tail[i].comm < tail[j].comm
+			}
+			return tail[i].pid < tail[j].pid
+		})
+		out = append(out, splitGroup{root: root, members: append([]splitPID{root}, tail...)})
+	}
+	return out
 }
 
 func runOutside(ctx context.Context, w *app.Window, done chan<- runResult, cmdline string, args ...string) {
@@ -3154,17 +3261,31 @@ func appShortcutBtn(gtx layout.Context, th *material.Theme, st *state, pal palet
 }
 
 func splitActiveBlock(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
-	if len(st.splitPIDs) == 0 && len(st.runStarting) == 0 {
+	if len(st.splitGroups) == 0 && len(st.runStarting) == 0 {
 		if st.splitLoading && !st.splitFirstLoaded {
 			return centerLabel(gtx, th, pal.muted, "loading…")
 		}
 		return centerLabel(gtx, th, pal.muted, "none")
 	}
-	children := make([]layout.FlexChild, 0, len(st.splitPIDs)+len(st.runStarting))
-	for _, p := range st.splitPIDs {
+	children := make([]layout.FlexChild, 0, len(st.splitGroups)+len(st.runStarting))
+	for _, g := range st.splitGroups {
+		ui := st.splitGroupUI[g.root.pid]
+		if len(g.members) < 2 || ui == nil {
+			children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return splitPIDRow(gtx, th, st, pal, g.root, 0)
+			}))
+			continue
+		}
 		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return splitPIDRow(gtx, th, st, pal, p)
+			return splitActiveGroupRow(gtx, th, pal, g, ui)
 		}))
+		if ui.open {
+			for _, m := range g.members {
+				children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return splitPIDRow(gtx, th, st, pal, m, unit.Dp(16))
+				}))
+			}
+		}
 	}
 	for _, c := range st.runStarting {
 		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -3172,6 +3293,41 @@ func splitActiveBlock(gtx layout.Context, th *material.Theme, st *state, pal pal
 		}))
 	}
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+}
+
+func splitActiveGroupRow(gtx layout.Context, th *material.Theme, pal palette, g splitGroup, ui *splitGroupUI) layout.Dimensions {
+	glyph := "▸"
+	if ui.open {
+		glyph = "▾"
+	}
+	label := "✕"
+	col := pal.muted
+	if !ui.armed.IsZero() && time.Since(ui.armed) < 5*time.Second {
+		label = "Confirm?"
+		col = pal.errFg
+	}
+	return ui.toggle.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		pointer.CursorPointer.Add(gtx.Ops)
+		return layout.Inset{Top: unit.Dp(2), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Label(th, unit.Sp(13), fmt.Sprintf("%s × %d", g.root.comm, len(g.members)))
+					lbl.Color = pal.fg
+					return lbl.Layout(gtx)
+				}),
+				layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return boxedInline(gtx, th, ui.kill, pal, unit.Sp(13), label, col)
+				}),
+				layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Label(th, unit.Sp(13), glyph)
+					lbl.Color = pal.muted
+					return lbl.Layout(gtx)
+				}),
+			)
+		})
+	})
 }
 
 func splitOtherList(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
@@ -3387,7 +3543,7 @@ func splitAppRow(gtx layout.Context, th *material.Theme, st *state, pal palette,
 	})
 }
 
-func splitPIDRow(gtx layout.Context, th *material.Theme, st *state, pal palette, p splitPID) layout.Dimensions {
+func splitPIDRow(gtx layout.Context, th *material.Theme, st *state, pal palette, p splitPID, leftPad unit.Dp) layout.Dimensions {
 	hc := st.pidRowHover[p.pid]
 	if hc == nil {
 		hc = &widget.Clickable{}
@@ -3397,7 +3553,7 @@ func splitPIDRow(gtx layout.Context, th *material.Theme, st *state, pal palette,
 	}
 	return hc.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return hoverBg(gtx, hc, pal, func(gtx layout.Context) layout.Dimensions {
-			return layout.Inset{Top: unit.Dp(2), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Top: unit.Dp(2), Bottom: unit.Dp(2), Left: leftPad}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						gtx.Constraints.Min.X = gtx.Dp(56)
@@ -3418,18 +3574,13 @@ func splitPIDRow(gtx layout.Context, th *material.Theme, st *state, pal palette,
 							lbl.Color = pal.muted
 							return lbl.Layout(gtx)
 						}
-						c, ok := st.splitClicks[p.pid]
-						if !ok {
-							c = &widget.Clickable{}
-							st.splitClicks[p.pid] = c
-						}
 						label := "✕"
 						col := pal.muted
 						if t, armed := st.splitArmed[p.pid]; armed && time.Since(t) < 5*time.Second {
 							label = "Confirm?"
 							col = pal.errFg
 						}
-						return boxedInline(gtx, th, c, pal, unit.Sp(13), label, col)
+						return boxedInline(gtx, th, st.splitClicks[p.pid], pal, unit.Sp(13), label, col)
 					}),
 				)
 			})
