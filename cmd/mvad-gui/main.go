@@ -371,6 +371,10 @@ func main() {
 	flag.BoolVar(&hidden, "hidden", false, "start without showing the window (tray-only)")
 	flag.Parse()
 
+	if pingInstance(!hidden) {
+		return
+	}
+
 	var st state
 	st.filter.SingleLine = true
 	st.relayList.Axis = layout.Vertical
@@ -461,6 +465,10 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	st.ctx = ctx
+
+	if err := serveInstance(ctx, trayCmds); err != nil {
+		log.Printf("instance: %v", err)
+	}
 
 	go pollStatus(ctx, pollsWin, pollsTray)
 
@@ -883,6 +891,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 			default:
 				applyTrayCmd(st, c)
 				w.Option(app.Windowed.Option())
+				w.Perform(system.ActionRaise)
 				setWindowState(windowState, true)
 			}
 		default:
