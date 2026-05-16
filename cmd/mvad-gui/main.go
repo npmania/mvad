@@ -86,7 +86,7 @@ var (
 		bg:     color.NRGBA{0xFA, 0xFA, 0xF7, 0xFF},
 		fg:     color.NRGBA{0x1A, 0x1A, 0x1A, 0xFF},
 		muted:  color.NRGBA{0x6B, 0x6B, 0x6B, 0xFF},
-		dim:    color.NRGBA{0xE2, 0xE2, 0xDF, 0xFF},
+		dim:    color.NRGBA{0xBE, 0xBE, 0xBA, 0xFF},
 		accent: color.NRGBA{0x2E, 0x7D, 0x5B, 0xFF},
 		errFg:  color.NRGBA{0xC0, 0x20, 0x20, 0xFF},
 	}
@@ -94,7 +94,7 @@ var (
 		bg:     color.NRGBA{0x14, 0x14, 0x16, 0xFF},
 		fg:     color.NRGBA{0xED, 0xED, 0xE8, 0xFF},
 		muted:  color.NRGBA{0x8A, 0x8A, 0x88, 0xFF},
-		dim:    color.NRGBA{0x2A, 0x2A, 0x2C, 0xFF},
+		dim:    color.NRGBA{0x42, 0x42, 0x46, 0xFF},
 		accent: color.NRGBA{0x5D, 0xBF, 0x8E, 0xFF},
 		errFg:  color.NRGBA{0xE0, 0x6A, 0x6A, 0xFF},
 	}
@@ -2115,13 +2115,23 @@ func subLines(st *state) []string {
 }
 
 func filterRow(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
-	return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
-		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-			return labeledEditor(gtx, th, &st.filter, pal, "Filter")
-		}),
-		layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return refreshGlyph(gtx, th, &st.refresh, st.relayLoading, pal)
+			lbl := material.Label(th, unit.Sp(12), "Filter")
+			lbl.Color = pal.muted
+			return lbl.Layout(gtx)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					return boxedEditor(gtx, th, &st.filter, pal, "")
+				}),
+				layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return refreshGlyph(gtx, th, &st.refresh, st.relayLoading, pal)
+				}),
+			)
 		}),
 	)
 }
@@ -2519,14 +2529,18 @@ func btnLayout(gtx layout.Context, th *material.Theme, btn *widget.Clickable, pa
 			})
 		})
 		call := macro.Stop()
-		rr := clip.UniformRRect(image.Rectangle{Max: dims.Size}, gtx.Dp(6))
+		sw := max(gtx.Dp(2), 2)
+		inset := sw / 2
+		r := gtx.Dp(6) - inset
+		rect := image.Rect(inset, inset, dims.Size.X-inset, dims.Size.Y-inset)
+		rr := clip.UniformRRect(rect, r)
 		stroke := pal.fg
 		if disabled {
 			stroke = pal.muted
 		} else if btn.Hovered() {
 			paint.FillShape(gtx.Ops, pal.dim, rr.Op(gtx.Ops))
 		}
-		paint.FillShape(gtx.Ops, stroke, clip.Stroke{Path: rr.Path(gtx.Ops), Width: float32(max(gtx.Dp(2), 2))}.Op())
+		paint.FillShape(gtx.Ops, stroke, clip.Stroke{Path: rr.Path(gtx.Ops), Width: float32(sw)}.Op())
 		call.Add(gtx.Ops)
 		return dims
 	})
