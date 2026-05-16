@@ -291,7 +291,6 @@ type state struct {
 	favClicks     map[string]*widget.Clickable
 	tr            tray
 	trayLastUp    bool
-	trayLastRelay string
 	hideRequested bool
 }
 
@@ -307,11 +306,12 @@ type trayCmdKind int
 const (
 	cmdShow trayCmdKind = iota
 	cmdConnect
+	cmdDisconnect
+	cmdReconnect
 	cmdSettings
 	cmdAccount
 	cmdSplit
 	cmdConnectFavorite
-	cmdAddFavorite
 	cmdQuit
 	cmdHide
 )
@@ -518,10 +518,10 @@ func main() {
 							st.cmdErr = errors.New("log in first")
 						}
 						windowed = true
-					case cmdAddFavorite:
-						if loggedIn(&st) {
-							addFavorite(&st, tr, c.relay)
-						}
+					case cmdDisconnect:
+						startCmd(&st, nil, "disconnect")
+					case cmdReconnect:
+						startCmd(&st, nil, reconnectArgs(&st)...)
 					default:
 						applyTrayCmd(&st, c)
 						windowed = true
@@ -535,6 +535,14 @@ func main() {
 						st.lockdownOn.Value = lockdown.Active()
 					}
 					updateTrayMenu(&st, r)
+				case r := <-st.cmdDone:
+					if r.name != "xdg-open" {
+						st.running = false
+						st.runningName = ""
+					}
+					st.cmdName = r.name
+					st.cmdOut = r.out
+					st.cmdErr = r.err
 				case <-ctx.Done():
 					return
 				}
@@ -884,10 +892,10 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 				}
 				w.Option(app.Windowed.Option())
 				setWindowState(windowState, true)
-			case cmdAddFavorite:
-				if loggedIn(st) {
-					addFavorite(st, st.tr, c.relay)
-				}
+			case cmdDisconnect:
+				startCmd(st, w, "disconnect")
+			case cmdReconnect:
+				startCmd(st, w, reconnectArgs(st)...)
 			default:
 				applyTrayCmd(st, c)
 				w.Option(app.Windowed.Option())
@@ -2719,6 +2727,25 @@ func runCmd(ctx context.Context, w *app.Window, done chan<- cmdResult, args ...s
 	}
 }
 
+func startCmd(st *state, w *app.Window, args ...string) {
+	if st.running {
+		return
+	}
+	st.cmdErr = nil
+	st.cmdOut = ""
+	st.running = true
+	st.runningName = args[0]
+	go runCmd(st.ctx, w, st.cmdDone, args...)
+}
+
+func reconnectArgs(st *state) []string {
+	args := []string{"reconnect"}
+	if st.cfg.AllowLAN {
+		args = append(args, "--allow-lan")
+	}
+	return args
+}
+
 func runUserCmd(ctx context.Context, w *app.Window, done chan<- cmdResult, args ...string) {
 	out, err := exec.CommandContext(ctx, mvadCmd, args...).CombinedOutput()
 	select {
@@ -2776,17 +2803,6 @@ func viaArg(st *state) (string, error) {
 	return "--via=" + v, nil
 }
 
-func addFavorite(st *state, tr tray, relay string) {
-	if relay == "" || containsString(st.cfg.Favorites, relay) {
-		return
-	}
-	st.cfg.Favorites = append(st.cfg.Favorites, relay)
-	_ = st.cfg.Save()
-	if tr != nil {
-		tr.setMenu(buildTrayMenu(st.cfg.Favorites, st.snap.Up, st.snap.Relay))
-	}
-}
-
 func removeFavorite(st *state, tr tray, relay string) {
 	for i, f := range st.cfg.Favorites {
 		if f != relay {
@@ -2796,7 +2812,7 @@ func removeFavorite(st *state, tr tray, relay string) {
 		_ = st.cfg.Save()
 		delete(st.favClicks, relay)
 		if tr != nil {
-			tr.setMenu(buildTrayMenu(st.cfg.Favorites, st.snap.Up, st.snap.Relay))
+			tr.setMenu(buildTrayMenu(st.cfg.Favorites, st.snap.Up))
 		}
 		return
 	}
@@ -2806,12 +2822,11 @@ func updateTrayMenu(st *state, r pollResult) {
 	if st.tr == nil || r.err != nil {
 		return
 	}
-	if r.snap.Up == st.trayLastUp && r.snap.Relay == st.trayLastRelay {
+	if r.snap.Up == st.trayLastUp {
 		return
 	}
 	st.trayLastUp = r.snap.Up
-	st.trayLastRelay = r.snap.Relay
-	st.tr.setMenu(buildTrayMenu(st.cfg.Favorites, r.snap.Up, r.snap.Relay))
+	st.tr.setMenu(buildTrayMenu(st.cfg.Favorites, r.snap.Up))
 }
 
 func runExternal(ctx context.Context, w *app.Window, done chan<- cmdResult, name string, args ...string) {

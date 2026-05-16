@@ -76,7 +76,7 @@ func startSNI(ctx context.Context, conn *dbus.Conn, polls <-chan pollResult, win
 	}
 
 	t := &sni{conn: conn, busName: busName, cmds: cmds, revision: 1}
-	t.menu = buildTrayMenu(favorites, false, "")
+	t.menu = buildTrayMenu(favorites, false)
 
 	if err := conn.Export(sniHandler{t}, sniPath, sniIface); err != nil {
 		t.shutdown()
@@ -257,12 +257,11 @@ type menuItem struct {
 	children []menuItem
 }
 
-func buildTrayMenu(favorites []string, up bool, relay string) []menuItem {
+func buildTrayMenu(favorites []string, up bool) []menuItem {
 	items := []menuItem{
 		{id: 1, label: "Show", cmd: trayCmd{kind: cmdShow}},
 		{id: 2, sep: true},
 	}
-	extras := false
 	if len(favorites) > 0 {
 		children := make([]menuItem, 0, len(favorites))
 		for i, h := range favorites {
@@ -277,21 +276,19 @@ func buildTrayMenu(favorites []string, up bool, relay string) []menuItem {
 			label:    "Connect to favorite",
 			children: children,
 		})
-		extras = true
-	}
-	if up && relay != "" && !containsString(favorites, relay) {
-		items = append(items, menuItem{
-			id:    200,
-			label: "Add current to favorites",
-			cmd:   trayCmd{kind: cmdAddFavorite, relay: relay},
-		})
-		extras = true
-	}
-	if extras {
 		items = append(items, menuItem{id: 201, sep: true})
 	}
+	if up {
+		items = append(items,
+			menuItem{id: 3, label: "Disconnect", cmd: trayCmd{kind: cmdDisconnect}},
+			menuItem{id: 9, label: "Reconnect", cmd: trayCmd{kind: cmdReconnect}},
+		)
+	} else {
+		items = append(items,
+			menuItem{id: 3, label: "Connect", cmd: trayCmd{kind: cmdConnect}},
+		)
+	}
 	items = append(items,
-		menuItem{id: 3, label: "Connect", cmd: trayCmd{kind: cmdConnect}},
 		menuItem{id: 4, label: "Settings", cmd: trayCmd{kind: cmdSettings}},
 		menuItem{id: 5, label: "Account", cmd: trayCmd{kind: cmdAccount}},
 		menuItem{id: 6, label: "Split", cmd: trayCmd{kind: cmdSplit}},

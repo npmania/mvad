@@ -166,7 +166,7 @@ func startXEmbed(ctx context.Context, polls <-chan pollResult, windowState <-cha
 	} else {
 		x.randrAvailable = true
 	}
-	x.menu = buildTrayMenu(favorites, false, "")
+	x.menu = buildTrayMenu(favorites, false)
 	log.Printf("tray: menu initialized (%d items)", len(x.menu))
 	if _, err := popupFont(); err != nil {
 		log.Printf("tray: popup font: %v", err)
@@ -290,16 +290,18 @@ func (x *xembed) handleEvent(ev xgb.Event, shown bool, last []byte) {
 		case e.Event == x.wid && e.Detail == 3:
 			log.Printf("tray: popup at %d,%d", e.RootX, e.RootY)
 			x.openPopup(e.RootX, e.RootY, shown)
-		case e.Event == x.popup && e.Detail == 1:
-			x.clickPopup(int(e.EventX), int(e.EventY))
+		case x.popup != 0 && e.Event == x.popup:
+			inside := e.EventX >= 0 && int(e.EventX) < x.popupW &&
+				e.EventY >= 0 && int(e.EventY) < x.popupH
+			if !inside {
+				x.closePopup()
+			} else if e.Detail == 1 {
+				x.clickPopup(int(e.EventX), int(e.EventY))
+			}
 		}
 	case xproto.MotionNotifyEvent:
 		if e.Event == x.popup {
-			x.hoverPopup(int(e.EventY))
-		}
-	case xproto.LeaveNotifyEvent:
-		if e.Event == x.popup {
-			x.closePopup()
+			x.hoverPopup(int(e.EventX), int(e.EventY))
 		}
 	case xproto.ExposeEvent:
 		switch e.Window {
@@ -506,8 +508,6 @@ func (x *xembed) openPopup(rootX, rootY int16, shown bool) {
 		0xFFFFFF,
 		1,
 		uint32(xproto.EventMaskButtonPress |
-			xproto.EventMaskEnterWindow |
-			xproto.EventMaskLeaveWindow |
 			xproto.EventMaskPointerMotion |
 			xproto.EventMaskExposure),
 	}
@@ -541,6 +541,17 @@ func (x *xembed) openPopup(rootX, rootY int16, shown bool) {
 		x.closePopup()
 		return
 	}
+	// X11 won't deliver outside-popup clicks otherwise.
+	reply, err := xproto.GrabPointer(x.conn, false, wid,
+		uint16(xproto.EventMaskButtonPress|xproto.EventMaskButtonRelease|xproto.EventMaskPointerMotion),
+		xproto.GrabModeAsync, xproto.GrabModeAsync,
+		xproto.WindowNone, xproto.CursorNone, xproto.TimeCurrentTime).Reply()
+	switch {
+	case err != nil:
+		log.Printf("tray: popup grab: %v", err)
+	case reply.Status != xproto.GrabStatusSuccess:
+		log.Printf("tray: popup grab status=%d", reply.Status)
+	}
 	log.Printf("tray: popup mapped")
 }
 
@@ -548,6 +559,7 @@ func (x *xembed) closePopup() {
 	if x.popup == 0 {
 		return
 	}
+	xproto.UngrabPointer(x.conn, xproto.TimeCurrentTime)
 	xproto.FreeGC(x.conn, x.popupGC)
 	xproto.DestroyWindow(x.conn, x.popup)
 	x.popup = 0
@@ -643,18 +655,20 @@ func rgbaToZPixmap24(img *image.RGBA) []byte {
 	return out
 }
 
-func (x *xembed) hoverPopup(y int) {
+func (x *xembed) hoverPopup(eventX, eventY int) {
 	if x.popup == 0 {
 		return
 	}
 	hov := -1
-	for i, r := range x.popupRows {
-		if r.sep || r.noop {
-			continue
-		}
-		if y >= x.popupYs[i] && y < x.popupYs[i]+x.popupRowH {
-			hov = i
-			break
+	if eventX >= 0 && eventX < x.popupW {
+		for i, r := range x.popupRows {
+			if r.sep || r.noop {
+				continue
+			}
+			if eventY >= x.popupYs[i] && eventY < x.popupYs[i]+x.popupRowH {
+				hov = i
+				break
+			}
 		}
 	}
 	if hov == x.popupHov {
