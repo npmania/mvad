@@ -5,5 +5,5 @@
     "exec": "mvad status --format=waybar",
     "return-type": "json",
     "interval": 2,
-    "on-click": "pkexec mvad disconnect"
+    "on-click": "mvad status >/dev/null && exec pkexec mvad disconnect || exec pkexec mvad reconnect"
 }

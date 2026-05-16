@@ -1,6 +1,6 @@
 ; Polybar. Paste into ~/.config/polybar/config.ini. Requires jq.
 [module/mvad]
 type = custom/script
-exec = mvad status --format=waybar | jq -r .text
+exec = mvad status --format=waybar | jq -r 'if .class=="connected" then "%{F#5fff5f}\(.text)%{F-}" else "%{F#ff5f5f}\(.text)%{F-}" end'
 interval = 2
-click-left = pkexec mvad disconnect
+click-left = mvad status >/dev/null && exec pkexec mvad disconnect || exec pkexec mvad reconnect
