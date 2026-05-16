@@ -204,9 +204,8 @@ type state struct {
 	refresh    widget.Clickable
 	toggle     widget.Clickable
 
-	headerClicks map[string]*widget.Clickable
-	anyClicks    map[string]*widget.Clickable
-	rowClicks    map[string]*widget.Clickable
+	anyClicks map[string]*widget.Clickable
+	rowClicks map[string]*widget.Clickable
 
 	view viewKind
 
@@ -381,7 +380,6 @@ func main() {
 	st.filter.SingleLine = true
 	st.relayList.Axis = layout.Vertical
 	st.expanded = map[string]bool{}
-	st.headerClicks = map[string]*widget.Clickable{}
 	st.anyClicks = map[string]*widget.Clickable{}
 	st.rowClicks = map[string]*widget.Clickable{}
 	st.deviceClicks = map[string]*widget.Clickable{}
@@ -1492,7 +1490,7 @@ func connectBody(gtx layout.Context, th *material.Theme, st *state, pal palette)
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return settingsRow(gtx, th, pal, "Multihop", "", &st.multihop)
+			return settingsRow(gtx, th, pal, "Multihop", "", &st.multihop, false)
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -1526,7 +1524,7 @@ func settingsBody(gtx layout.Context, th *material.Theme, st *state, pal palette
 			if lockSettings {
 				gtx = gtx.Disabled()
 			}
-			return settingsRow(gtx, th, pal, "Allow LAN", "", &st.allowLAN)
+			return settingsRow(gtx, th, pal, "Allow LAN", "", &st.allowLAN, lockSettings)
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -1540,7 +1538,7 @@ func settingsBody(gtx layout.Context, th *material.Theme, st *state, pal palette
 			if lockSettings {
 				gtx = gtx.Disabled()
 			}
-			return settingsRow(gtx, th, pal, "Lockdown", "persistent kill-switch", &st.lockdownOn)
+			return settingsRow(gtx, th, pal, "Lockdown", "persistent kill-switch", &st.lockdownOn, lockSettings)
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			if !lockSettings {
@@ -1557,7 +1555,7 @@ func settingsBody(gtx layout.Context, th *material.Theme, st *state, pal palette
 		children = append(children,
 			layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return settingsRow(gtx, th, pal, "Close to tray", "X button hides instead of quits", &st.closeToTray)
+				return settingsRow(gtx, th, pal, "Close to tray", "X button hides instead of quits", &st.closeToTray, false)
 			}),
 		)
 	}
@@ -1626,24 +1624,25 @@ func favoriteRow(gtx layout.Context, th *material.Theme, st *state, pal palette,
 			}),
 			layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					pointer.CursorPointer.Add(gtx.Ops)
-					lbl := material.Label(th, unit.Sp(13), "remove")
-					lbl.Color = pal.fg
-					return lbl.Layout(gtx)
-				})
+				return boxedInline(gtx, th, c, pal, unit.Sp(13), "remove", pal.fg)
 			}),
 		)
 	})
 }
 
-func settingsRow(gtx layout.Context, th *material.Theme, pal palette, title, sub string, b *widget.Bool) layout.Dimensions {
+func settingsRow(gtx layout.Context, th *material.Theme, pal palette, title, sub string, b *widget.Bool, disabled bool) layout.Dimensions {
+	titleCol := pal.fg
+	subCol := pal.muted
+	if disabled {
+		titleCol = pal.muted
+		subCol = lerpNRGBA(pal.muted, pal.bg, 0.4)
+	}
 	return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			children := []layout.FlexChild{
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					lbl := material.Label(th, unit.Sp(14), title)
-					lbl.Color = pal.fg
+					lbl.Color = titleCol
 					return lbl.Layout(gtx)
 				}),
 			}
@@ -1652,7 +1651,7 @@ func settingsRow(gtx layout.Context, th *material.Theme, pal palette, title, sub
 					layout.Rigid(layout.Spacer{Height: unit.Dp(2)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						lbl := material.Label(th, unit.Sp(12), sub)
-						lbl.Color = pal.muted
+						lbl.Color = subCol
 						return lbl.Layout(gtx)
 					}),
 				)
@@ -1660,7 +1659,7 @@ func settingsRow(gtx layout.Context, th *material.Theme, pal palette, title, sub
 			return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return togglePill(gtx, b, pal)
+			return togglePill(gtx, b, pal, disabled)
 		}),
 	)
 }
@@ -1719,7 +1718,7 @@ func transportSection(gtx layout.Context, th *material.Theme, st *state, pal pal
 		children = append(children,
 			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return splitEditor(gtx, th, &st.bridge, pal, "Bridge host")
+				return labeledEditor(gtx, th, &st.bridge, pal, "Bridge host")
 			}),
 		)
 	}
@@ -1750,29 +1749,37 @@ func transportLabel(gtx layout.Context, th *material.Theme, c *widget.Clickable,
 	})
 }
 
-func togglePill(gtx layout.Context, b *widget.Bool, pal palette) layout.Dimensions {
+func togglePill(gtx layout.Context, b *widget.Bool, pal palette, disabled bool) layout.Dimensions {
 	return b.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		pointer.CursorPointer.Add(gtx.Ops)
-		w, h := gtx.Dp(28), gtx.Dp(14)
-		track := pal.dim
+		if !disabled {
+			pointer.CursorPointer.Add(gtx.Ops)
+		}
+		w, h := gtx.Dp(32), gtx.Dp(16)
+		trackOn, trackOff := pal.accent, pal.dim
+		knobOn, knobOff := pal.bg, pal.muted
+		if disabled {
+			trackOn = lerpNRGBA(trackOn, pal.bg, 0.55)
+			trackOff = lerpNRGBA(trackOff, pal.bg, 0.4)
+			knobOn = lerpNRGBA(knobOn, pal.muted, 0.3)
+			knobOff = lerpNRGBA(knobOff, pal.bg, 0.4)
+		}
+		track := trackOff
+		knob := knobOff
 		if b.Value {
-			track = pal.accent
+			track = trackOn
+			knob = knobOn
 		}
 		rr := clip.UniformRRect(image.Rectangle{Max: image.Pt(w, h)}, h/2)
-		paint.FillShape(gtx.Ops, track, clip.Stroke{Path: rr.Path(gtx.Ops), Width: float32(max(gtx.Dp(1), 1))}.Op())
+		paint.FillShape(gtx.Ops, track, rr.Op(gtx.Ops))
 		d := h - gtx.Dp(4)
 		x := gtx.Dp(2)
 		if b.Value {
 			x = w - d - gtx.Dp(2)
 		}
 		y := (h - d) / 2
-		knob := image.Rectangle{Min: image.Pt(x, y), Max: image.Pt(x+d, y+d)}
-		knobRR := clip.UniformRRect(knob, d/2)
-		if b.Value {
-			paint.FillShape(gtx.Ops, pal.accent, knobRR.Op(gtx.Ops))
-		} else {
-			paint.FillShape(gtx.Ops, pal.muted, clip.Stroke{Path: knobRR.Path(gtx.Ops), Width: float32(max(gtx.Dp(1), 1))}.Op())
-		}
+		knobR := image.Rectangle{Min: image.Pt(x, y), Max: image.Pt(x+d, y+d)}
+		knobRR := clip.UniformRRect(knobR, d/2)
+		paint.FillShape(gtx.Ops, knob, knobRR.Op(gtx.Ops))
 		return layout.Dimensions{Size: image.Pt(w, h)}
 	})
 }
@@ -1847,7 +1854,6 @@ func accountInfoRows(th *material.Theme, st *state, pal palette) []layout.FlexCh
 			}),
 		)
 	}
-	children = append(children, devicesSection(th, st, pal)...)
 	logoutLabel := "Logout"
 	if !st.logoutArmed.IsZero() && time.Since(st.logoutArmed) < 5*time.Second {
 		logoutLabel = "Confirm?"
@@ -1868,17 +1874,14 @@ func accountInfoRows(th *material.Theme, st *state, pal palette) []layout.FlexCh
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return hairline(gtx, pal.dim)
-		}),
-		layout.Rigid(layout.Spacer{Height: unit.Dp(28)}.Layout),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return actionButton(gtx, th, &st.rotateKey, pal, rotateLabel, rotateDisabled, st.runningName == "rotate-key")
 		}),
-		layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return actionButton(gtx, th, &st.logout, pal, logoutLabel, st.running || st.snap.Up, st.runningName == "logout")
 		}),
 	)
+	children = append(children, devicesSection(th, st, pal)...)
 	return children
 }
 
@@ -1892,11 +1895,11 @@ func accountSignInRows(th *material.Theme, st *state, pal palette) []layout.Flex
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return splitEditor(gtx, th, &st.loginToken, pal, "Account number")
+			return labeledEditor(gtx, th, &st.loginToken, pal, "Account number")
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return splitEditor(gtx, th, &st.loginKey, pal, "Private key (optional)")
+			return labeledEditor(gtx, th, &st.loginKey, pal, "Private key (optional)")
 		}),
 	}
 	if st.loginErr != "" {
@@ -2097,7 +2100,7 @@ func subLines(st *state) []string {
 func filterRow(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
 	return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-			return filterEditor(gtx, th, &st.filter, pal)
+			return labeledEditor(gtx, th, &st.filter, pal, "Filter")
 		}),
 		layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -2197,30 +2200,16 @@ func selectionStripes(gtx layout.Context, pal palette, exitSel, entrySel bool) l
 	return layout.Dimensions{Size: image.Pt(full, h)}
 }
 
-func filterEditor(gtx layout.Context, th *material.Theme, ed *widget.Editor, pal palette) layout.Dimensions {
+func labeledEditor(gtx layout.Context, th *material.Theme, ed *widget.Editor, pal palette, label string) layout.Dimensions {
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			lbl := material.Label(th, unit.Sp(12), "Filter")
+			lbl := material.Label(th, unit.Sp(12), label)
 			lbl.Color = pal.muted
 			return lbl.Layout(gtx)
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			es := material.Editor(th, ed, "")
-			es.Color = pal.fg
-			es.HintColor = pal.muted
-			gtx.Constraints.Min.X = gtx.Constraints.Max.X
-			return es.Layout(gtx)
-		}),
-		layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			c := pal.dim
-			if gtx.Focused(ed) {
-				c = pal.accent
-			}
-			sz := image.Pt(gtx.Constraints.Max.X, max(gtx.Dp(1), 1))
-			paint.FillShape(gtx.Ops, c, clip.Rect{Max: sz}.Op())
-			return layout.Dimensions{Size: sz}
+			return boxedEditor(gtx, th, ed, pal, "")
 		}),
 	)
 }
@@ -2254,6 +2243,9 @@ func relayListArea(gtx layout.Context, th *material.Theme, st *state, pal palett
 		return centerLabel(gtx, th, pal.muted, fmt.Sprintf("no relays match %q", st.filter.Text()))
 	}
 	list := material.List(th, &st.relayList)
+	list.Track.Color = pal.dim
+	list.Indicator.Color = pal.muted
+	list.Indicator.HoverColor = pal.fg
 	return list.Layout(gtx, len(rows), func(gtx layout.Context, i int) layout.Dimensions {
 		return rowLayout(gtx, th, st, pal, rows[i])
 	})
@@ -2341,34 +2333,35 @@ func rowLayout(gtx layout.Context, th *material.Theme, st *state, pal palette, r
 		return relayRow(gtx, th, st, pal, r.relay)
 	}
 	if r.city != "" {
-		return headerRow(gtx, th, st, pal, r.city, r.code, r.country+"|"+r.city, unit.Dp(12), unit.Sp(13))
+		return headerRow(gtx, th, st, pal, r.city, r.code, r.country+"|"+r.city, unit.Dp(24), unit.Sp(13))
 	}
-	return headerRow(gtx, th, st, pal, r.country, r.code, r.country, 0, unit.Sp(14))
+	return headerRow(gtx, th, st, pal, r.country, r.code, r.country, unit.Dp(12), unit.Sp(14))
 }
 
 func headerRow(gtx layout.Context, th *material.Theme, st *state, pal palette, label, code, key string, leftPad unit.Dp, sz unit.Sp) layout.Dimensions {
-	ec := st.headerClicks[key]
-	if ec == nil {
-		ec = &widget.Clickable{}
-		st.headerClicks[key] = ec
-	}
-	if ec.Clicked(gtx) {
-		st.expanded[key] = !st.expanded[key]
-	}
 	ac := st.anyClicks[code]
 	if ac == nil {
 		ac = &widget.Clickable{}
 		st.anyClicks[code] = ac
-	}
-	if ac.Clicked(gtx) {
-		toggleSel(st, code)
 	}
 	hc := st.headerHover[key]
 	if hc == nil {
 		hc = &widget.Clickable{}
 		st.headerHover[key] = hc
 	}
+	// hc covers the whole row; a chip click fires both. Suppress the row
+	// expand when the chip handled it.
+	acClicked := false
+	for ac.Clicked(gtx) {
+		acClicked = true
+		toggleSel(st, code)
+	}
+	hcClicked := false
 	for hc.Clicked(gtx) {
+		hcClicked = true
+	}
+	if hcClicked && !acClicked {
+		st.expanded[key] = !st.expanded[key]
 	}
 	open := st.expanded[key] || st.filter.Text() != ""
 	glyph := "▸"
@@ -2388,27 +2381,24 @@ func headerRow(gtx layout.Context, th *material.Theme, st *state, pal palette, l
 		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
 			gtx.Constraints.Min.X = gtx.Constraints.Max.X
 			return hc.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				pointer.CursorPointer.Add(gtx.Ops)
 				return hoverBg(gtx, hc, pal, func(gtx layout.Context) layout.Dimensions {
 					return layout.Inset{Left: leftPad, Top: unit.Dp(6), Bottom: unit.Dp(6)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 						return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 							layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-								return ec.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-									pointer.CursorPointer.Add(gtx.Ops)
-									gtx.Constraints.Min.X = gtx.Constraints.Max.X
-									lbl := material.Label(th, sz, label)
-									lbl.Color = pal.fg
-									return lbl.Layout(gtx)
-								})
-							}),
-							layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
-							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								return boxedInline(gtx, th, ac, pal, unit.Sp(12), "Any", chipCol)
+								lbl := material.Label(th, sz, label)
+								lbl.Color = pal.fg
+								return lbl.Layout(gtx)
 							}),
 							layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 								lbl := material.Label(th, sz, glyph)
 								lbl.Color = pal.muted
 								return lbl.Layout(gtx)
+							}),
+							layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return boxedInline(gtx, th, ac, pal, unit.Sp(12), "Any", chipCol)
 							}),
 						)
 					})
@@ -2438,7 +2428,7 @@ func relayRow(gtx layout.Context, th *material.Theme, st *state, pal palette, r 
 		return hoverBg(gtx, rc, pal, func(gtx layout.Context) layout.Dimensions {
 			return layout.Stack{}.Layout(gtx,
 				layout.Stacked(func(gtx layout.Context) layout.Dimensions {
-					return layout.Inset{Left: unit.Dp(24), Top: unit.Dp(4), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return layout.Inset{Left: unit.Dp(36), Top: unit.Dp(4), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 						lbl := material.Label(th, unit.Sp(13), r.Hostname)
 						lbl.Color = pal.fg
 						return lbl.Layout(gtx)
@@ -2480,24 +2470,41 @@ func actionButton(gtx layout.Context, th *material.Theme, btn *widget.Clickable,
 		gtx = gtx.Disabled()
 	}
 	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		gtx.Constraints.Max.X = gtx.Dp(140)
-		return btn.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		w := min(gtx.Dp(180), gtx.Constraints.Max.X)
+		gtx.Constraints.Min.X = w
+		gtx.Constraints.Max.X = w
+		return btnLayout(gtx, th, btn, pal, label, disabled)
+	})
+}
+
+func btnLayout(gtx layout.Context, th *material.Theme, btn *widget.Clickable, pal palette, label string, disabled bool) layout.Dimensions {
+	return btn.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if !disabled {
 			pointer.CursorPointer.Add(gtx.Ops)
-			macro := op.Record(gtx.Ops)
-			dims := layout.UniformInset(unit.Dp(10)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					lbl := material.Label(th, unit.Sp(14), label)
-					lbl.Color = pal.fg
-					return lbl.Layout(gtx)
-				})
+		}
+		macro := op.Record(gtx.Ops)
+		dims := layout.UniformInset(unit.Dp(12)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+			return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Label(th, unit.Sp(14), label)
+				lbl.Color = pal.fg
+				if disabled {
+					lbl.Color = pal.muted
+				}
+				return lbl.Layout(gtx)
 			})
-			call := macro.Stop()
-			rr := clip.UniformRRect(image.Rectangle{Max: dims.Size}, gtx.Dp(4))
-			border := clip.Stroke{Path: rr.Path(gtx.Ops), Width: float32(max(gtx.Dp(1), 1))}.Op()
-			paint.FillShape(gtx.Ops, pal.fg, border)
-			call.Add(gtx.Ops)
-			return dims
 		})
+		call := macro.Stop()
+		rr := clip.UniformRRect(image.Rectangle{Max: dims.Size}, gtx.Dp(6))
+		stroke := pal.fg
+		if disabled {
+			stroke = pal.muted
+		} else if btn.Hovered() {
+			paint.FillShape(gtx.Ops, pal.dim, rr.Op(gtx.Ops))
+		}
+		paint.FillShape(gtx.Ops, stroke, clip.Stroke{Path: rr.Path(gtx.Ops), Width: float32(max(gtx.Dp(2), 2))}.Op())
+		call.Add(gtx.Ops)
+		return dims
 	})
 }
 
@@ -3504,7 +3511,7 @@ func splitAdvancedToggle(gtx layout.Context, th *material.Theme, st *state, pal 
 func splitAdvancedBlock(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return splitEditor(gtx, th, &st.addPID, pal, "Add PID")
+			return labeledEditor(gtx, th, &st.addPID, pal, "Add PID")
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -3524,7 +3531,7 @@ func splitAdvancedBlock(gtx layout.Context, th *material.Theme, st *state, pal p
 func splitAppsConfig(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
 	children := []layout.FlexChild{
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return splitEditor(gtx, th, &st.addAppEd, pal, "Add app shortcut (binary name)")
+			return labeledEditor(gtx, th, &st.addAppEd, pal, "Add app shortcut (binary name)")
 		}),
 	}
 	for _, name := range st.cfg.SplitApps {
@@ -3553,12 +3560,7 @@ func splitAppRow(gtx layout.Context, th *material.Theme, st *state, pal palette,
 			}),
 			layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					pointer.CursorPointer.Add(gtx.Ops)
-					lbl := material.Label(th, unit.Sp(13), "remove")
-					lbl.Color = pal.fg
-					return lbl.Layout(gtx)
-				})
+				return boxedInline(gtx, th, c, pal, unit.Sp(13), "remove", pal.fg)
 			}),
 		)
 	})
@@ -3671,38 +3673,10 @@ func boxedEditor(gtx layout.Context, th *material.Theme, ed *widget.Editor,
 	return dims
 }
 
-func splitEditor(gtx layout.Context, th *material.Theme, ed *widget.Editor, pal palette, label string) layout.Dimensions {
-	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			lbl := material.Label(th, unit.Sp(12), label)
-			lbl.Color = pal.muted
-			return lbl.Layout(gtx)
-		}),
-		layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			es := material.Editor(th, ed, "")
-			es.Color = pal.fg
-			es.HintColor = pal.muted
-			gtx.Constraints.Min.X = gtx.Constraints.Max.X
-			return es.Layout(gtx)
-		}),
-		layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			c := pal.dim
-			if gtx.Focused(ed) {
-				c = pal.accent
-			}
-			sz := image.Pt(gtx.Constraints.Max.X, max(gtx.Dp(1), 1))
-			paint.FillShape(gtx.Ops, c, clip.Rect{Max: sz}.Op())
-			return layout.Dimensions{Size: sz}
-		}),
-	)
-}
-
 func splitRunBlock(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return splitEditor(gtx, th, &st.runCmdEd, pal, "Run outside tunnel")
+			return labeledEditor(gtx, th, &st.runCmdEd, pal, "Run outside tunnel")
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -3719,21 +3693,7 @@ func splitRunBlock(gtx layout.Context, th *material.Theme, st *state, pal palett
 					if busy {
 						gtx = gtx.Disabled()
 					}
-					return st.runBtn.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-						pointer.CursorPointer.Add(gtx.Ops)
-						macro := op.Record(gtx.Ops)
-						dims := layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							lbl := material.Label(th, unit.Sp(14), label)
-							lbl.Color = pal.fg
-							return lbl.Layout(gtx)
-						})
-						call := macro.Stop()
-						rr := clip.UniformRRect(image.Rectangle{Max: dims.Size}, gtx.Dp(4))
-						border := clip.Stroke{Path: rr.Path(gtx.Ops), Width: float32(max(gtx.Dp(1), 1))}.Op()
-						paint.FillShape(gtx.Ops, pal.fg, border)
-						call.Add(gtx.Ops)
-						return dims
-					})
+					return btnLayout(gtx, th, &st.runBtn, pal, label, busy)
 				}),
 			)
 		}),
