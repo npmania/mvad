@@ -234,8 +234,11 @@ type state struct {
 	loginAtCap bool
 	signupOut  string
 
-	viaEntry widget.Editor
+	entry    string
 	multihop widget.Bool
+	armEntry bool
+	exitClk  widget.Clickable
+	entryClk widget.Clickable
 
 	acctRefresh    widget.Clickable
 	acctRefreshing bool
@@ -407,7 +410,6 @@ func main() {
 	st.runCmdEd.SingleLine = true
 	st.loginToken.SingleLine = true
 	st.loginKey.SingleLine = true
-	st.viaEntry.SingleLine = true
 	st.bridge.SingleLine = true
 
 	cfg, err := config.Load()
@@ -1165,8 +1167,19 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 				st.cfg.NoCloseToTray = !st.closeToTray.Value
 				_ = st.cfg.Save()
 			}
-			if st.multihop.Update(gtx) && !st.multihop.Value {
-				st.viaEntry.SetText("")
+			if st.multihop.Update(gtx) {
+				if st.multihop.Value {
+					st.armEntry = st.selected != ""
+				} else {
+					st.entry = ""
+					st.armEntry = false
+				}
+			}
+			if st.exitClk.Clicked(gtx) {
+				st.armEntry = false
+			}
+			if st.entryClk.Clicked(gtx) && st.multihop.Value {
+				st.armEntry = true
 			}
 			if st.lockdownOn.Update(gtx) {
 				if st.running || st.snap.Up {
@@ -1423,26 +1436,14 @@ func tab(gtx layout.Context, th *material.Theme, c *widget.Clickable, pal palett
 func connectBody(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
 	word, wordColor := headline(st, pal)
 	filterText := st.filter.Text()
-	if st.selected != "" && filterText != "" {
-		f := strings.ToLower(strings.TrimSpace(filterText))
-		keep := false
-		for i := range st.relays {
-			r := &st.relays[i]
-			if !relayMatches(r, f) {
-				continue
-			}
-			if r.Hostname == st.selected || strings.HasPrefix(r.Hostname, st.selected+"-") {
-				keep = true
-				break
-			}
-		}
-		if !keep {
-			st.selected = ""
-		}
-	}
+	st.selected = clearIfFiltered(st.selected, st.relays, filterText)
+	st.entry = clearIfFiltered(st.entry, st.relays, filterText)
 	rows := buildRows(st.relays, st.expanded, filterText)
 	btnDisabled := st.selected == "" || st.running || !loggedIn(st)
 	if st.transport == "shadowsocks" && strings.TrimSpace(st.bridge.Text()) == "" {
+		btnDisabled = true
+	}
+	if st.multihop.Value && st.entry == "" {
 		btnDisabled = true
 	}
 
@@ -1477,6 +1478,14 @@ func connectBody(gtx layout.Context, th *material.Theme, st *state, pal palette)
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return filterRow(gtx, th, st, pal)
 		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if !st.multihop.Value {
+				return layout.Dimensions{}
+			}
+			return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return selectorChips(gtx, th, st, pal)
+			})
+		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			return relayListArea(gtx, th, st, pal, rows)
@@ -1484,14 +1493,6 @@ func connectBody(gtx layout.Context, th *material.Theme, st *state, pal palette)
 		layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return settingsRow(gtx, th, pal, "Multihop", "", &st.multihop)
-		}),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			if !st.multihop.Value {
-				return layout.Dimensions{}
-			}
-			return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return boxedEditor(gtx, th, &st.viaEntry, pal, "entry hostname or country/city code")
-			})
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -2105,6 +2106,85 @@ func filterRow(gtx layout.Context, th *material.Theme, st *state, pal palette) l
 	)
 }
 
+func selectorChips(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
+	return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return selectorChip(gtx, th, pal, "Exit", st.selected, !st.armEntry, pal.accent, &st.exitClk)
+		}),
+		layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return selectorChip(gtx, th, pal, "Entry", st.entry, st.armEntry, pal.fg, &st.entryClk)
+		}),
+	)
+}
+
+func selectorChip(gtx layout.Context, th *material.Theme, pal palette, role, value string, armed bool, armCol color.NRGBA, click *widget.Clickable) layout.Dimensions {
+	return click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		pointer.CursorPointer.Add(gtx.Ops)
+		dot := "○"
+		if armed {
+			dot = "●"
+		}
+		v := value
+		if v == "" {
+			v = "—"
+		}
+		macro := op.Record(gtx.Ops)
+		dims := layout.UniformInset(unit.Dp(6)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Label(th, unit.Sp(12), dot+"  "+role+": "+v)
+			lbl.Color = pal.muted
+			if armed {
+				lbl.Color = pal.fg
+			}
+			return lbl.Layout(gtx)
+		})
+		call := macro.Stop()
+		border := pal.dim
+		switch {
+		case armed:
+			border = armCol
+		case click.Hovered():
+			border = pal.fg
+		}
+		rr := clip.UniformRRect(image.Rectangle{Max: dims.Size}, gtx.Dp(4))
+		paint.FillShape(gtx.Ops, border, clip.Stroke{Path: rr.Path(gtx.Ops), Width: float32(max(gtx.Dp(1), 1))}.Op())
+		call.Add(gtx.Ops)
+		return dims
+	})
+}
+
+func clearIfFiltered(cur string, relays []mullvad.Relay, filter string) string {
+	if cur == "" || filter == "" {
+		return cur
+	}
+	f := strings.ToLower(strings.TrimSpace(filter))
+	for i := range relays {
+		r := &relays[i]
+		if !relayMatches(r, f) {
+			continue
+		}
+		if r.Hostname == cur || strings.HasPrefix(r.Hostname, cur+"-") {
+			return cur
+		}
+	}
+	return ""
+}
+
+func selectionStripes(gtx layout.Context, pal palette, exitSel, entrySel bool) layout.Dimensions {
+	w := gtx.Dp(2)
+	h := gtx.Constraints.Min.Y
+	full := gtx.Constraints.Min.X
+	if exitSel {
+		paint.FillShape(gtx.Ops, pal.accent, clip.Rect{Max: image.Pt(w, h)}.Op())
+	}
+	if entrySel {
+		push := op.Offset(image.Pt(full-w, 0)).Push(gtx.Ops)
+		paint.FillShape(gtx.Ops, pal.fg, clip.Rect{Max: image.Pt(w, h)}.Op())
+		push.Pop()
+	}
+	return layout.Dimensions{Size: image.Pt(full, h)}
+}
+
 func filterEditor(gtx layout.Context, th *material.Theme, ed *widget.Editor, pal palette) layout.Dimensions {
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -2269,7 +2349,11 @@ func headerRow(gtx layout.Context, th *material.Theme, st *state, pal palette, l
 		st.anyClicks[code] = ac
 	}
 	if ac.Clicked(gtx) {
-		st.selected = code
+		if st.armEntry {
+			st.entry = code
+		} else {
+			st.selected = code
+		}
 	}
 	hc := st.headerHover[key]
 	if hc == nil {
@@ -2283,10 +2367,14 @@ func headerRow(gtx layout.Context, th *material.Theme, st *state, pal palette, l
 	if open {
 		glyph = "▾"
 	}
-	selected := st.selected == code
+	exitSel := st.selected == code
+	entrySel := st.multihop.Value && st.entry == code
 	chipCol := pal.muted
-	if selected {
+	switch {
+	case exitSel:
 		chipCol = pal.accent
+	case entrySel:
+		chipCol = pal.fg
 	}
 	return layout.Stack{}.Layout(gtx,
 		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
@@ -2320,12 +2408,7 @@ func headerRow(gtx layout.Context, th *material.Theme, st *state, pal palette, l
 			})
 		}),
 		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
-			if !selected {
-				return layout.Dimensions{}
-			}
-			bar := image.Pt(gtx.Dp(2), gtx.Constraints.Min.Y)
-			paint.FillShape(gtx.Ops, pal.accent, clip.Rect{Max: bar}.Op())
-			return layout.Dimensions{Size: bar}
+			return selectionStripes(gtx, pal, exitSel, entrySel)
 		}),
 	)
 }
@@ -2337,9 +2420,14 @@ func relayRow(gtx layout.Context, th *material.Theme, st *state, pal palette, r 
 		st.rowClicks[r.Hostname] = rc
 	}
 	if rc.Clicked(gtx) {
-		st.selected = r.Hostname
+		if st.armEntry {
+			st.entry = r.Hostname
+		} else {
+			st.selected = r.Hostname
+		}
 	}
-	selected := st.selected == r.Hostname
+	exitSel := st.selected == r.Hostname
+	entrySel := st.multihop.Value && st.entry == r.Hostname
 	return rc.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		pointer.CursorPointer.Add(gtx.Ops)
 		gtx.Constraints.Min.X = gtx.Constraints.Max.X
@@ -2353,12 +2441,7 @@ func relayRow(gtx layout.Context, th *material.Theme, st *state, pal palette, r 
 					})
 				}),
 				layout.Expanded(func(gtx layout.Context) layout.Dimensions {
-					if !selected {
-						return layout.Dimensions{}
-					}
-					sz := image.Pt(gtx.Dp(2), gtx.Constraints.Min.Y)
-					paint.FillShape(gtx.Ops, pal.accent, clip.Rect{Max: sz}.Op())
-					return layout.Dimensions{Size: sz}
+					return selectionStripes(gtx, pal, exitSel, entrySel)
 				}),
 			)
 		})
@@ -2704,14 +2787,13 @@ func startConnect(st *state, w *app.Window, relay string) {
 }
 
 func viaArg(st *state) (string, error) {
-	v := strings.TrimSpace(st.viaEntry.Text())
-	if v == "" {
+	if !st.multihop.Value || st.entry == "" {
 		return "", nil
 	}
-	if _, err := mullvad.Pick(st.relays, v); err != nil {
-		return "", fmt.Errorf("multihop entry not found: %s", v)
+	if _, err := mullvad.Pick(st.relays, st.entry); err != nil {
+		return "", fmt.Errorf("multihop entry not found: %s", st.entry)
 	}
-	return "--via=" + v, nil
+	return "--via=" + st.entry, nil
 }
 
 func removeFavorite(st *state, tr tray, relay string) {
