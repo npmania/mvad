@@ -199,10 +199,10 @@ type state struct {
 	relayLoadErr string
 	relayLoading bool
 
-	btn       widget.Clickable
-	reconnect widget.Clickable
-	refresh   widget.Clickable
-	toggle    widget.Clickable
+	btn        widget.Clickable
+	disconnect widget.Clickable
+	refresh    widget.Clickable
+	toggle     widget.Clickable
 
 	headerClicks map[string]*widget.Clickable
 	anyClicks    map[string]*widget.Clickable
@@ -307,7 +307,6 @@ const (
 	cmdShow trayCmdKind = iota
 	cmdConnect
 	cmdDisconnect
-	cmdReconnect
 	cmdSettings
 	cmdAccount
 	cmdSplit
@@ -520,8 +519,6 @@ func main() {
 						windowed = true
 					case cmdDisconnect:
 						startCmd(&st, nil, "disconnect")
-					case cmdReconnect:
-						startCmd(&st, nil, reconnectArgs(&st)...)
 					default:
 						applyTrayCmd(&st, c)
 						windowed = true
@@ -894,8 +891,6 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 				setWindowState(windowState, true)
 			case cmdDisconnect:
 				startCmd(st, w, "disconnect")
-			case cmdReconnect:
-				startCmd(st, w, reconnectArgs(st)...)
 			default:
 				applyTrayCmd(st, c)
 				w.Option(app.Windowed.Option())
@@ -1209,52 +1204,15 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 			if st.openAcct.Clicked(gtx) {
 				go runExternal(st.ctx, w, st.cmdDone, "xdg-open", "https://mullvad.net/account")
 			}
-			if !st.running && st.btn.Clicked(gtx) {
-				if st.snap.Up {
-					st.cmdErr = nil
-					st.cmdOut = ""
-					st.running = true
-					st.runningName = "disconnect"
-					go runCmd(st.ctx, w, st.cmdDone, "disconnect")
-				} else if st.selected != "" && loggedIn(st) {
-					varg, err := viaArg(st)
-					if err != nil {
-						st.cmdName = "connect"
-						st.cmdErr = err
-						st.cmdOut = ""
-					} else {
-						st.cmdErr = nil
-						st.cmdOut = ""
-						st.running = true
-						st.runningName = "connect"
-						args := []string{"connect"}
-						if st.allowLAN.Value {
-							args = append(args, "--allow-lan")
-						}
-						if st.transport == "tcp" {
-							args = append(args, "--transport=tcp", fmt.Sprintf("--port=%d", st.tcpPort))
-						}
-						if st.transport == "shadowsocks" {
-							args = append(args, "--transport=shadowsocks", "--bridge="+strings.TrimSpace(st.bridge.Text()))
-						}
-						if varg != "" {
-							args = append(args, varg)
-						}
-						args = append(args, "--", st.selected)
-						go runCmd(st.ctx, w, st.cmdDone, args...)
-					}
-				}
+			if !st.running && st.btn.Clicked(gtx) && st.selected != "" && loggedIn(st) {
+				startConnect(st, w, st.selected)
 			}
-			if !st.running && st.reconnect.Clicked(gtx) && st.cfg.LastRelay != "" && loggedIn(st) {
+			if !st.running && st.disconnect.Clicked(gtx) && st.snap.Up {
 				st.cmdErr = nil
 				st.cmdOut = ""
 				st.running = true
-				st.runningName = "reconnect"
-				args := []string{"reconnect"}
-				if st.allowLAN.Value {
-					args = append(args, "--allow-lan")
-				}
-				go runCmd(st.ctx, w, st.cmdDone, args...)
+				st.runningName = "disconnect"
+				go runCmd(st.ctx, w, st.cmdDone, "disconnect")
 			}
 			if !st.running && st.loginBtn.Clicked(gtx) {
 				token := strings.TrimSpace(st.loginToken.Text())
@@ -1377,14 +1335,6 @@ func layoutUI(gtx layout.Context, th *material.Theme, st *state) {
 	th.Bg, th.Fg = pal.bg, pal.fg
 	th.ContrastBg, th.ContrastFg = pal.fg, pal.bg
 
-	if st.snap.Up {
-		if st.selected != "" || len(st.expanded) > 0 || st.filter.Text() != "" {
-			st.selected = ""
-			st.expanded = map[string]bool{}
-			st.filter.SetText("")
-		}
-	}
-
 	layout.Stack{}.Layout(gtx,
 		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
 			dims := layout.UniformInset(unit.Dp(24)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -1421,10 +1371,7 @@ func panelBody(gtx layout.Context, th *material.Theme, st *state, pal palette) l
 	case viewSplit:
 		return splitBody(gtx, th, st, pal)
 	}
-	if st.snap.Up {
-		return connectedBody(gtx, th, st, pal)
-	}
-	return disconnectedBody(gtx, th, st, pal)
+	return connectBody(gtx, th, st, pal)
 }
 
 func tabStrip(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
@@ -1473,52 +1420,7 @@ func tab(gtx layout.Context, th *material.Theme, c *widget.Clickable, pal palett
 	})
 }
 
-func connectedBody(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
-	word, wordColor := headline(st, pal)
-	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			lbl := material.Label(th, unit.Sp(24), word)
-			lbl.Color = wordColor
-			return lbl.Layout(gtx)
-		}),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			lines := subLines(st)
-			if len(lines) == 0 {
-				return layout.Dimensions{}
-			}
-			children := make([]layout.FlexChild, 0, len(lines))
-			for _, line := range lines {
-				c := pal.muted
-				if st.txActive && strings.Contains(line, "↑") {
-					c = pal.accent
-				}
-				children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					lbl := material.Label(th, unit.Sp(13), line)
-					lbl.Color = c
-					return lbl.Layout(gtx)
-				}))
-			}
-			return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
-			})
-		}),
-		layout.Rigid(layout.Spacer{Height: unit.Dp(28)}.Layout),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return actionButton(gtx, th, &st.btn, pal, "Disconnect", st.running, st.runningName == "disconnect")
-		}),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return reconnectLink(gtx, th, st, pal)
-		}),
-		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-			return layout.Dimensions{Size: gtx.Constraints.Min}
-		}),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return footer(gtx, th, st, pal)
-		}),
-	)
-}
-
-func disconnectedBody(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
+func connectBody(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
 	word, wordColor := headline(st, pal)
 	filterText := st.filter.Text()
 	if st.selected != "" && filterText != "" {
@@ -1550,6 +1452,27 @@ func disconnectedBody(gtx layout.Context, th *material.Theme, st *state, pal pal
 			lbl.Color = wordColor
 			return lbl.Layout(gtx)
 		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			lines := subLines(st)
+			if len(lines) == 0 {
+				return layout.Dimensions{}
+			}
+			children := make([]layout.FlexChild, 0, len(lines))
+			for _, line := range lines {
+				c := pal.muted
+				if st.txActive && strings.Contains(line, "↑") {
+					c = pal.accent
+				}
+				children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Label(th, unit.Sp(13), line)
+					lbl.Color = c
+					return lbl.Layout(gtx)
+				}))
+			}
+			return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+			})
+		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return filterRow(gtx, th, st, pal)
@@ -1575,6 +1498,9 @@ func disconnectedBody(gtx layout.Context, th *material.Theme, st *state, pal pal
 			return actionButton(gtx, th, &st.btn, pal, "Connect", btnDisabled, st.runningName == "connect")
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if st.snap.Up {
+				return disconnectLink(gtx, th, st, pal)
+			}
 			if !loggedIn(st) {
 				return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -1584,7 +1510,7 @@ func disconnectedBody(gtx layout.Context, th *material.Theme, st *state, pal pal
 					})
 				})
 			}
-			return reconnectLink(gtx, th, st, pal)
+			return layout.Dimensions{}
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return footer(gtx, th, st, pal)
@@ -2439,27 +2365,20 @@ func relayRow(gtx layout.Context, th *material.Theme, st *state, pal palette, r 
 	})
 }
 
-func reconnectLink(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
-	if !loggedIn(st) {
-		return layout.Dimensions{}
-	}
-	target := st.cfg.LastQuery
-	if target == "" {
-		target = st.cfg.LastRelay
-	}
-	if target == "" {
+func disconnectLink(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
+	if !st.snap.Up {
 		return layout.Dimensions{}
 	}
 	if st.running {
 		gtx = gtx.Disabled()
 	}
-	label := "Reconnect to " + target
-	if st.runningName == "reconnect" {
+	label := "Disconnect"
+	if st.runningName == "disconnect" {
 		label += "…"
 	}
 	return layout.Inset{Top: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			return inlineAction(gtx, th, &st.reconnect, unit.Sp(13), label, pal.accent)
+			return inlineAction(gtx, th, &st.disconnect, unit.Sp(13), label, pal.accent)
 		})
 	})
 }
@@ -2736,14 +2655,6 @@ func startCmd(st *state, w *app.Window, args ...string) {
 	st.running = true
 	st.runningName = args[0]
 	go runCmd(st.ctx, w, st.cmdDone, args...)
-}
-
-func reconnectArgs(st *state) []string {
-	args := []string{"reconnect"}
-	if st.cfg.AllowLAN {
-		args = append(args, "--allow-lan")
-	}
-	return args
 }
 
 func runUserCmd(ctx context.Context, w *app.Window, done chan<- cmdResult, args ...string) {

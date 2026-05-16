@@ -852,6 +852,11 @@ func doConnect(opts connectOpts) (retErr error) {
 		cfg.LastTransport = "shadowsocks"
 		cfg.LastBridge = ssBridge.Hostname
 	}
+	if snap, _ := status.Read(ifname); snap.Up {
+		if err := doDisconnect(); err != nil {
+			return fmt.Errorf("disconnect existing tunnel: %w", err)
+		}
+	}
 	if err := cfg.Save(); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
@@ -979,9 +984,6 @@ func reconnect(args []string) error {
 	case "shadowsocks":
 		opts.transport = "shadowsocks"
 		opts.bridge = cfg.LastBridge
-	}
-	if err := doDisconnect(); err != nil {
-		return err
 	}
 	return doConnect(opts)
 }

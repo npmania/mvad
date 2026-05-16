@@ -281,7 +281,6 @@ func buildTrayMenu(favorites []string, up bool) []menuItem {
 	if up {
 		items = append(items,
 			menuItem{id: 3, label: "Disconnect", cmd: trayCmd{kind: cmdDisconnect}},
-			menuItem{id: 9, label: "Reconnect", cmd: trayCmd{kind: cmdReconnect}},
 		)
 	} else {
 		items = append(items,
