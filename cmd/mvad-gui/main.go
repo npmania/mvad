@@ -2378,6 +2378,11 @@ func headerRow(gtx layout.Context, th *material.Theme, st *state, pal palette, l
 		st.expanded[key] = !st.expanded[key]
 		st.relayRowsValid = false
 	}
+	// Pointer events only fire one frame; without an explicit invalidate
+	// the new expanded state has to wait for the 1s status ticker.
+	if hcClicked || acClicked {
+		gtx.Execute(op.InvalidateCmd{})
+	}
 	open := st.expanded[key] || st.filter.Text() != ""
 	glyph := "▸"
 	if open {
@@ -2434,6 +2439,7 @@ func relayRow(gtx layout.Context, th *material.Theme, st *state, pal palette, r 
 	}
 	if rc.Clicked(gtx) {
 		toggleSel(st, r.Hostname)
+		gtx.Execute(op.InvalidateCmd{})
 	}
 	exitSel := st.selected == r.Hostname
 	entrySel := st.multihop.Value && st.entry == r.Hostname
