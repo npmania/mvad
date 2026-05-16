@@ -7,4 +7,6 @@ Exec=mvad-gui
 Icon=mvad
 Terminal=false
 Categories=Network;
+Keywords=VPN;Mullvad;WireGuard;
+StartupNotify=true
 StartupWMClass=mvad

@@ -6,6 +6,7 @@ Wants=network-pre.target
 [Service]
 Type=oneshot
 ExecStart=/usr/sbin/nft -f /var/lib/mvad/lockdown.nft
+ExecStop=/usr/bin/true
 RemainAfterExit=yes
 
 [Install]

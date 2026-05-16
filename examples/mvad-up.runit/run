@@ -1,2 +1,2 @@
 #!/bin/sh
-exec /usr/bin/mvad up se-sto-wg-001
+exec /usr/bin/mvad up se-got-wg-001

@@ -3,12 +3,13 @@
  "-//freedesktop//DTD polkit Policy Configuration 1.0//EN"
  "http://www.freedesktop.org/software/polkit/policyconfig-1.dtd">
 <policyconfig>
-	<vendor>mvad</vendor>
+	<vendor>mvad project</vendor>
 	<vendor_url>https://github.com/npmania/mvad</vendor_url>
 
-	<action id="net.mullvad.mvad">
+	<action id="io.github.npmania.mvad">
 		<description>Manage Mullvad VPN</description>
 		<message>Authentication is required to manage the Mullvad VPN tunnel.</message>
+		<icon_name>mvad</icon_name>
 		<defaults>
 			<allow_any>auth_admin_keep</allow_any>
 			<allow_inactive>auth_admin_keep</allow_inactive>
