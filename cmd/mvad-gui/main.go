@@ -2153,6 +2153,18 @@ func selectorChip(gtx layout.Context, th *material.Theme, pal palette, role, val
 	})
 }
 
+func toggleSel(st *state, v string) {
+	t := &st.selected
+	if st.armEntry {
+		t = &st.entry
+	}
+	if *t == v {
+		*t = ""
+	} else {
+		*t = v
+	}
+}
+
 func clearIfFiltered(cur string, relays []mullvad.Relay, filter string) string {
 	if cur == "" || filter == "" {
 		return cur
@@ -2349,11 +2361,7 @@ func headerRow(gtx layout.Context, th *material.Theme, st *state, pal palette, l
 		st.anyClicks[code] = ac
 	}
 	if ac.Clicked(gtx) {
-		if st.armEntry {
-			st.entry = code
-		} else {
-			st.selected = code
-		}
+		toggleSel(st, code)
 	}
 	hc := st.headerHover[key]
 	if hc == nil {
@@ -2420,11 +2428,7 @@ func relayRow(gtx layout.Context, th *material.Theme, st *state, pal palette, r 
 		st.rowClicks[r.Hostname] = rc
 	}
 	if rc.Clicked(gtx) {
-		if st.armEntry {
-			st.entry = r.Hostname
-		} else {
-			st.selected = r.Hostname
-		}
+		toggleSel(st, r.Hostname)
 	}
 	exitSel := st.selected == r.Hostname
 	entrySel := st.multihop.Value && st.entry == r.Hostname
