@@ -1545,7 +1545,7 @@ func settingsBody(gtx layout.Context, th *material.Theme, st *state, pal palette
 			if lockSettings {
 				gtx = gtx.Disabled()
 			}
-			return transportSection(gtx, th, st, pal)
+			return transportSection(gtx, th, st, pal, lockSettings)
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -1553,16 +1553,6 @@ func settingsBody(gtx layout.Context, th *material.Theme, st *state, pal palette
 				gtx = gtx.Disabled()
 			}
 			return settingsRow(gtx, th, pal, "Lockdown", "persistent kill-switch", &st.lockdownOn, lockSettings)
-		}),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			if !lockSettings {
-				return layout.Dimensions{}
-			}
-			return layout.Inset{Top: unit.Dp(20)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				lbl := material.Label(th, unit.Sp(12), "disconnect to change")
-				lbl.Color = pal.muted
-				return lbl.Layout(gtx)
-			})
 		}),
 	}
 	if st.tr != nil {
@@ -1678,26 +1668,31 @@ func settingsRow(gtx layout.Context, th *material.Theme, pal palette, title, sub
 	)
 }
 
-func transportSection(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
+func transportSection(gtx layout.Context, th *material.Theme, st *state, pal palette, disabled bool) layout.Dimensions {
+	headCol, subCol := pal.fg, pal.muted
+	if disabled {
+		headCol = pal.muted
+		subCol = lerpNRGBA(pal.muted, pal.bg, 0.4)
+	}
 	children := []layout.FlexChild{
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			lbl := material.Label(th, unit.Sp(14), "Transport")
-			lbl.Color = pal.fg
+			lbl.Color = headCol
 			return lbl.Layout(gtx)
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return transportLabel(gtx, th, &st.trWG, pal, "wireguard", st.transport == "wireguard")
+					return transportLabel(gtx, th, &st.trWG, pal, "wireguard", st.transport == "wireguard", disabled)
 				}),
 				layout.Rigid(layout.Spacer{Width: unit.Dp(16)}.Layout),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return transportLabel(gtx, th, &st.trTCP, pal, "tcp", st.transport == "tcp")
+					return transportLabel(gtx, th, &st.trTCP, pal, "tcp", st.transport == "tcp", disabled)
 				}),
 				layout.Rigid(layout.Spacer{Width: unit.Dp(16)}.Layout),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return transportLabel(gtx, th, &st.trSS, pal, "shadowsocks", st.transport == "shadowsocks")
+					return transportLabel(gtx, th, &st.trSS, pal, "shadowsocks", st.transport == "shadowsocks", disabled)
 				}),
 			)
 		}),
@@ -1707,22 +1702,22 @@ func transportSection(gtx layout.Context, th *material.Theme, st *state, pal pal
 			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				lbl := material.Label(th, unit.Sp(13), "Port")
-				lbl.Color = pal.muted
+				lbl.Color = subCol
 				return lbl.Layout(gtx)
 			}),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return transportLabel(gtx, th, &st.trP80, pal, "80", st.tcpPort == 80)
+						return transportLabel(gtx, th, &st.trP80, pal, "80", st.tcpPort == 80, disabled)
 					}),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(16)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return transportLabel(gtx, th, &st.trP443, pal, "443", st.tcpPort == 443)
+						return transportLabel(gtx, th, &st.trP443, pal, "443", st.tcpPort == 443, disabled)
 					}),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(16)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return transportLabel(gtx, th, &st.trP5001, pal, "5001", st.tcpPort == 5001)
+						return transportLabel(gtx, th, &st.trP5001, pal, "5001", st.tcpPort == 5001, disabled)
 					}),
 				)
 			}),
@@ -1739,14 +1734,22 @@ func transportSection(gtx layout.Context, th *material.Theme, st *state, pal pal
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
 }
 
-func transportLabel(gtx layout.Context, th *material.Theme, c *widget.Clickable, pal palette, label string, active bool) layout.Dimensions {
+func transportLabel(gtx layout.Context, th *material.Theme, c *widget.Clickable, pal palette, label string, active, disabled bool) layout.Dimensions {
 	return c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		pointer.CursorPointer.Add(gtx.Ops)
-		lbl := material.Label(th, unit.Sp(13), label)
-		lbl.Color = pal.muted
-		if active {
-			lbl.Color = pal.fg
+		if !disabled {
+			pointer.CursorPointer.Add(gtx.Ops)
 		}
+		txt, under := pal.muted, pal.accent
+		switch {
+		case disabled && active:
+			txt, under = pal.muted, pal.muted
+		case disabled:
+			txt, under = lerpNRGBA(pal.muted, pal.bg, 0.4), pal.muted
+		case active:
+			txt = pal.fg
+		}
+		lbl := material.Label(th, unit.Sp(13), label)
+		lbl.Color = txt
 		macro := op.Record(gtx.Ops)
 		dims := lbl.Layout(gtx)
 		call := macro.Stop()
@@ -1755,7 +1758,7 @@ func transportLabel(gtx layout.Context, th *material.Theme, c *widget.Clickable,
 		if active {
 			gap := gtx.Dp(2)
 			push := op.Offset(image.Pt(0, dims.Size.Y+gap)).Push(gtx.Ops)
-			paint.FillShape(gtx.Ops, pal.accent, clip.Rect{Max: image.Pt(dims.Size.X, gtx.Dp(1))}.Op())
+			paint.FillShape(gtx.Ops, under, clip.Rect{Max: image.Pt(dims.Size.X, gtx.Dp(1))}.Op())
 			push.Pop()
 			h += gap + gtx.Dp(1)
 		}
