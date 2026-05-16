@@ -199,6 +199,14 @@ type state struct {
 	relayLoadErr string
 	relayLoading bool
 
+	// Cached rowLayout output. buildRows runs through ~700 relays and
+	// allocates while sorting; rebuilding it every frame stutters the
+	// expand/collapse animation. Invalidated when relays, expanded, or
+	// the filter text changes.
+	relayRows       []row
+	relayRowsValid  bool
+	relayRowsFilter string
+
 	btn        widget.Clickable
 	disconnect widget.Clickable
 	refresh    widget.Clickable
@@ -736,6 +744,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 			} else {
 				st.relayLoadErr = ""
 				st.relays = r.relays
+				st.relayRowsValid = false
 			}
 		case r := <-st.splitDone:
 			st.splitLoading = false
@@ -1436,7 +1445,12 @@ func connectBody(gtx layout.Context, th *material.Theme, st *state, pal palette)
 	filterText := st.filter.Text()
 	st.selected = clearIfFiltered(st.selected, st.relays, filterText)
 	st.entry = clearIfFiltered(st.entry, st.relays, filterText)
-	rows := buildRows(st.relays, st.expanded, filterText)
+	if !st.relayRowsValid || st.relayRowsFilter != filterText {
+		st.relayRows = buildRows(st.relays, st.expanded, filterText)
+		st.relayRowsFilter = filterText
+		st.relayRowsValid = true
+	}
+	rows := st.relayRows
 	btnDisabled := st.selected == "" || st.running || !loggedIn(st)
 	if st.transport == "shadowsocks" && strings.TrimSpace(st.bridge.Text()) == "" {
 		btnDisabled = true
@@ -2362,6 +2376,7 @@ func headerRow(gtx layout.Context, th *material.Theme, st *state, pal palette, l
 	}
 	if hcClicked && !acClicked {
 		st.expanded[key] = !st.expanded[key]
+		st.relayRowsValid = false
 	}
 	open := st.expanded[key] || st.filter.Text() != ""
 	glyph := "▸"
