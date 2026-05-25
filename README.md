@@ -34,7 +34,3 @@ The GUI links against Gio and needs X11 or Wayland dev headers.
 
 Unit files for systemd, OpenRC, and runit, plus a `.desktop` entry
 and a polkit policy, live in `examples/`.
-
-## License
-
-MIT.
