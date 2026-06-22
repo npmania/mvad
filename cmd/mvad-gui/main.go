@@ -207,10 +207,9 @@ type state struct {
 	relayRowsValid  bool
 	relayRowsFilter string
 
-	btn        widget.Clickable
-	disconnect widget.Clickable
-	refresh    widget.Clickable
-	toggle     widget.Clickable
+	btn     widget.Clickable
+	refresh widget.Clickable
+	toggle  widget.Clickable
 
 	anyClicks map[string]*widget.Clickable
 	rowClicks map[string]*widget.Clickable
@@ -1224,15 +1223,12 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 			if st.openAcct.Clicked(gtx) {
 				go runExternal(st.ctx, w, st.cmdDone, "xdg-open", "https://mullvad.net/account")
 			}
-			if !st.running && st.btn.Clicked(gtx) && st.selected != "" && loggedIn(st) {
-				startConnect(st, w, st.selected)
-			}
-			if !st.running && st.disconnect.Clicked(gtx) && st.snap.Up {
-				st.cmdErr = nil
-				st.cmdOut = ""
-				st.running = true
-				st.runningName = "disconnect"
-				go runCmd(st.ctx, w, st.cmdDone, "disconnect")
+			if !st.running && st.btn.Clicked(gtx) {
+				if st.snap.Up {
+					startCmd(st, w, "disconnect")
+				} else if st.selected != "" && loggedIn(st) {
+					startConnect(st, w, st.selected)
+				}
 			}
 			if !st.running && st.loginBtn.Clicked(gtx) {
 				token := strings.TrimSpace(st.loginToken.Text())
@@ -1508,22 +1504,22 @@ func connectBody(gtx layout.Context, th *material.Theme, st *state, pal palette)
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if st.snap.Up {
+				return actionButton(gtx, th, &st.btn, pal, "Disconnect", st.running, st.runningName == "disconnect")
+			}
 			return actionButton(gtx, th, &st.btn, pal, "Connect", btnDisabled, st.runningName == "connect")
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			if st.snap.Up {
-				return disconnectLink(gtx, th, st, pal)
+			if st.snap.Up || loggedIn(st) {
+				return layout.Dimensions{}
 			}
-			if !loggedIn(st) {
-				return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-						lbl := material.Label(th, unit.Sp(12), "log in first")
-						lbl.Color = pal.muted
-						return lbl.Layout(gtx)
-					})
+			return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Label(th, unit.Sp(12), "log in first")
+					lbl.Color = pal.muted
+					return lbl.Layout(gtx)
 				})
-			}
-			return layout.Dimensions{}
+			})
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return footer(gtx, th, st, pal)
@@ -2472,24 +2468,6 @@ func relayRow(gtx layout.Context, th *material.Theme, st *state, pal palette, r 
 					return selectionStripes(gtx, pal, exitSel, entrySel)
 				}),
 			)
-		})
-	})
-}
-
-func disconnectLink(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
-	if !st.snap.Up {
-		return layout.Dimensions{}
-	}
-	if st.running {
-		gtx = gtx.Disabled()
-	}
-	label := "Disconnect"
-	if st.runningName == "disconnect" {
-		label += "…"
-	}
-	return layout.Inset{Top: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			return inlineAction(gtx, th, &st.disconnect, unit.Sp(13), label, pal.accent)
 		})
 	})
 }
