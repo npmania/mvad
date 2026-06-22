@@ -178,7 +178,7 @@ func startXEmbed(ctx context.Context, polls <-chan pollResult, windowState <-cha
 	return x, nil
 }
 
-// shield() lays bytes out as A,R,G,B, so alpha is at offset 0.
+// disc() lays bytes out as A,R,G,B, so alpha is at offset 0.
 func buildShapeRects(pix []byte, w, h int) []xproto.Rectangle {
 	var out []xproto.Rectangle
 	for y := range h {
@@ -703,7 +703,7 @@ func (x *xembed) clickPopup(eventX, eventY int) {
 	x.closePopup()
 }
 
-// toZPixmap converts the in-memory ARGB byte order produced by shield()
+// toZPixmap converts the in-memory ARGB byte order produced by disc()
 // into the wire layout PutImage(ZPixmap) expects on a little-endian X
 // server. Depth 24: B,G,R,pad. Depth 32 ARGB visual: B,G,R,A.
 func toZPixmap(depth byte, argb []byte) []byte {
