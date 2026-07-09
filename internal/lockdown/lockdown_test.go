@@ -12,7 +12,7 @@ func TestBuildScript(t *testing.T) {
 		netip.MustParseAddr("2001:db8::1"),
 		netip.MustParseAddr("1.2.3.4"),
 	}
-	got := buildScript(ips)
+	got := buildScript(ips, "mvad-wg0")
 	want := `add table inet mvad-lockdown
 delete table inet mvad-lockdown
 table inet mvad-lockdown {
@@ -29,6 +29,7 @@ table inet mvad-lockdown {
 	chain output {
 		type filter hook output priority 0; policy drop;
 		oifname "lo" accept
+		oifname "mvad-wg0" accept
 		ct state established,related accept
 		ip daddr @relays_v4 accept
 		ip6 daddr @relays_v6 accept
@@ -46,7 +47,7 @@ table inet mvad-lockdown {
 }
 
 func TestBuildScriptEmpty(t *testing.T) {
-	got := buildScript(nil)
+	got := buildScript(nil, "mvad-wg0")
 	want := `add table inet mvad-lockdown
 delete table inet mvad-lockdown
 table inet mvad-lockdown {
@@ -61,6 +62,7 @@ table inet mvad-lockdown {
 	chain output {
 		type filter hook output priority 0; policy drop;
 		oifname "lo" accept
+		oifname "mvad-wg0" accept
 		ct state established,related accept
 		ip daddr @relays_v4 accept
 		ip6 daddr @relays_v6 accept

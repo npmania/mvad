@@ -1157,7 +1157,7 @@ func lockdownOn(args []string) error {
 	if err != nil {
 		return err
 	}
-	return lockdown.On(ips)
+	return lockdown.On(ips, ifname)
 }
 
 func lockdownOff(args []string) error {
@@ -1199,7 +1199,7 @@ func lockdownRefresh(args []string) error {
 	if err != nil {
 		return err
 	}
-	return lockdown.Refresh(ips)
+	return lockdown.Refresh(ips, ifname)
 }
 
 func loadRelayIPs() ([]netip.Addr, error) {

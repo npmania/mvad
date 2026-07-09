@@ -4,7 +4,7 @@ package lockdown
 
 import "net/netip"
 
-func on(relayIPs []netip.Addr) error      { return ErrUnsupported }
-func off() error                          { return ErrUnsupported }
-func refresh(relayIPs []netip.Addr) error { return ErrUnsupported }
-func active() bool                        { return false }
+func on([]netip.Addr, string) error      { return ErrUnsupported }
+func off() error                         { return ErrUnsupported }
+func refresh([]netip.Addr, string) error { return ErrUnsupported }
+func active() bool                       { return false }

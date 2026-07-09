@@ -22,20 +22,20 @@ var (
 	ErrEmptyAllow  = errors.New("lockdown: refusing empty allow-list")
 )
 
-func On(relayIPs []netip.Addr) error {
+func On(relayIPs []netip.Addr, iface string) error {
 	if !hasValid(relayIPs) {
 		return ErrEmptyAllow
 	}
-	return on(relayIPs)
+	return on(relayIPs, iface)
 }
 
 func Off() error { return off() }
 
-func Refresh(relayIPs []netip.Addr) error {
+func Refresh(relayIPs []netip.Addr, iface string) error {
 	if !hasValid(relayIPs) {
 		return ErrEmptyAllow
 	}
-	return refresh(relayIPs)
+	return refresh(relayIPs, iface)
 }
 
 func Active() bool { return active() }
@@ -49,7 +49,7 @@ func hasValid(ips []netip.Addr) bool {
 	return false
 }
 
-func buildScript(ips []netip.Addr) string {
+func buildScript(ips []netip.Addr, iface string) string {
 	v4, v6 := splitFamilies(ips)
 	var b strings.Builder
 	fmt.Fprintf(&b, "add table inet %s\n", tableName)
@@ -60,6 +60,9 @@ func buildScript(ips []netip.Addr) string {
 	b.WriteString("\tchain output {\n")
 	b.WriteString("\t\ttype filter hook output priority 0; policy drop;\n")
 	b.WriteString("\t\toifname \"lo\" accept\n")
+	// Without this, a lockdown-plus-tunnel pairing passes the
+	// handshake (relay daddr) but drops every new flow inside it.
+	fmt.Fprintf(&b, "\t\toifname %q accept\n", iface)
 	b.WriteString("\t\tct state established,related accept\n")
 	b.WriteString("\t\tip daddr @relays_v4 accept\n")
 	b.WriteString("\t\tip6 daddr @relays_v6 accept\n")

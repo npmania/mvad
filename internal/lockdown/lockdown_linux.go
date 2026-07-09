@@ -14,8 +14,8 @@ import (
 	"strings"
 )
 
-func on(relayIPs []netip.Addr) error {
-	script := buildScript(relayIPs)
+func on(relayIPs []netip.Addr, iface string) error {
+	script := buildScript(relayIPs, iface)
 	if err := writeScript(script); err != nil {
 		return err
 	}
@@ -39,13 +39,13 @@ func off() error {
 	return errors.Join(delErr, rmErr)
 }
 
-func refresh(relayIPs []netip.Addr) error {
+func refresh(relayIPs []netip.Addr, iface string) error {
 	if _, err := os.Stat(scriptPath); errors.Is(err, os.ErrNotExist) {
 		return nil
 	} else if err != nil {
 		return err
 	}
-	script := buildScript(relayIPs)
+	script := buildScript(relayIPs, iface)
 	if err := writeScript(script); err != nil {
 		return err
 	}
