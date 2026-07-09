@@ -42,6 +42,8 @@ type Config struct {
 	Favorites         []string        `json:"favorites,omitempty"`
 	SplitApps         []string        `json:"split_apps,omitempty"`
 	SplitNets         []string        `json:"split_nets,omitempty"`
+	SplitDocker       []string        `json:"split_docker,omitempty"`
+	SplitCompose      []string        `json:"split_compose,omitempty"`
 }
 
 func path() (string, error) {

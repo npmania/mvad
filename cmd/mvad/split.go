@@ -172,6 +172,8 @@ func splitCmd(args []string) error {
 		return splitAddCompose(rest)
 	case "rm-compose":
 		return splitRmCompose(rest)
+	case "refresh":
+		return splitRefresh(rest)
 	case "list":
 		return splitList(rest)
 	case "clear":
@@ -239,6 +241,12 @@ func splitList(args []string) error {
 	for _, s := range cfg.SplitNets {
 		fmt.Println(s)
 	}
+	for _, s := range cfg.SplitDocker {
+		fmt.Println("docker:" + s)
+	}
+	for _, s := range cfg.SplitCompose {
+		fmt.Println("compose:" + s)
+	}
 	return nil
 }
 
@@ -264,8 +272,10 @@ func splitClear(args []string) error {
 		return errors.Join(clearErr, err)
 	}
 	var saveErr error
-	if cfg.SplitNets != nil {
+	if cfg.SplitNets != nil || cfg.SplitDocker != nil || cfg.SplitCompose != nil {
 		cfg.SplitNets = nil
+		cfg.SplitDocker = nil
+		cfg.SplitCompose = nil
 		saveErr = cfg.Save()
 	}
 	return errors.Join(clearErr, saveErr)
@@ -286,7 +296,7 @@ func splitAddIP(args []string) error {
 	if err != nil {
 		return err
 	}
-	return addNets([]netip.Prefix{p})
+	return splitAddEntry(splitNetsOf, p.String())
 }
 
 func splitRmIP(args []string) error {
@@ -304,7 +314,7 @@ func splitRmIP(args []string) error {
 	if err != nil {
 		return err
 	}
-	return rmNets([]netip.Prefix{p})
+	return splitRmEntry(splitNetsOf, p.String())
 }
 
 func splitAddDocker(args []string) error {
@@ -326,7 +336,7 @@ func splitAddDocker(args []string) error {
 		return fmt.Errorf("container %s has no IP address; is it running?", args[0])
 	}
 	printNets(ps)
-	return addNets(ps)
+	return splitAddEntry(splitDockerOf, args[0])
 }
 
 func splitRmDocker(args []string) error {
@@ -340,15 +350,7 @@ func splitRmDocker(args []string) error {
 	if len(args) != 1 {
 		return usagef(usageSplitRmDocker)
 	}
-	ps, err := dockerNets(args[0])
-	if err != nil {
-		return err
-	}
-	if len(ps) == 0 {
-		return fmt.Errorf("container %s has no IP address; is it running?", args[0])
-	}
-	printNets(ps)
-	return rmNets(ps)
+	return splitRmEntry(splitDockerOf, args[0])
 }
 
 func splitAddCompose(args []string) error {
@@ -362,12 +364,14 @@ func splitAddCompose(args []string) error {
 	if len(args) != 1 && len(args) != 2 {
 		return usagef(usageSplitAddCompose)
 	}
-	ps, err := composeNets(args[0], composeService(args))
+	entry := composeEntry(args)
+	project, service, _ := strings.Cut(entry, "/")
+	ps, err := composeNets(project, service)
 	if err != nil {
 		return err
 	}
 	printNets(ps)
-	return addNets(ps)
+	return splitAddEntry(splitComposeOf, entry)
 }
 
 func splitRmCompose(args []string) error {
@@ -381,19 +385,44 @@ func splitRmCompose(args []string) error {
 	if len(args) != 1 && len(args) != 2 {
 		return usagef(usageSplitRmCompose)
 	}
-	ps, err := composeNets(args[0], composeService(args))
+	// A bare project also removes its per-service entries.
+	entry := composeEntry(args)
+	return splitRmMatch(splitComposeOf, entry, func(s string) bool {
+		return s == entry || strings.HasPrefix(s, entry+"/")
+	})
+}
+
+func splitRefresh(args []string) error {
+	if wantHelp(args) {
+		fmt.Println(usageSplitRefresh)
+		return nil
+	}
+	if os.Geteuid() != 0 {
+		return errors.New("this command needs root; rerun with sudo")
+	}
+	if len(args) != 0 {
+		return usagef(usageSplitRefresh)
+	}
+	release, err := lock.AcquireRoot()
 	if err != nil {
 		return err
 	}
-	printNets(ps)
-	return rmNets(ps)
+	defer release()
+	if !split.Available() {
+		return errors.New("split-tunnel inactive; run mvad connect first")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	return syncNets(cfg)
 }
 
-func composeService(args []string) string {
+func composeEntry(args []string) string {
 	if len(args) == 2 {
-		return args[1]
+		return args[0] + "/" + args[1]
 	}
-	return ""
+	return args[0]
 }
 
 func parseNet(s string) (netip.Prefix, error) {
@@ -410,15 +439,13 @@ func parseNet(s string) (netip.Prefix, error) {
 	return netip.PrefixFrom(a, a.BitLen()), nil
 }
 
-func printNets(ps []netip.Prefix) {
-	for _, p := range ps {
-		fmt.Println(p)
-	}
-}
+func splitNetsOf(c *config.Config) *[]string    { return &c.SplitNets }
+func splitDockerOf(c *config.Config) *[]string  { return &c.SplitDocker }
+func splitComposeOf(c *config.Config) *[]string { return &c.SplitCompose }
 
-// addNets records the prefixes in config, so connect reseeds them, and
-// updates the live nft set when one is installed.
-func addNets(ps []netip.Prefix) error {
+// splitAddEntry records the entry in config, so connect reseeds it,
+// and reconciles the live set when one is installed.
+func splitAddEntry(list func(*config.Config) *[]string, entry string) error {
 	release, err := lock.AcquireRoot()
 	if err != nil {
 		return err
@@ -428,40 +455,22 @@ func addNets(ps []netip.Prefix) error {
 	if err != nil {
 		return err
 	}
-	// An overlapping element poisons the seeded set on the next
-	// connect (nft rejects conflicting intervals), so refuse it here.
-	have := parseNets(cfg.SplitNets)
-	changed := false
-	for _, p := range ps {
-		if slices.Contains(cfg.SplitNets, p.String()) {
-			continue
-		}
-		for _, q := range have {
-			if p.Overlaps(q) {
-				return fmt.Errorf("%s overlaps %s; rm-ip it first", p, q)
-			}
-		}
-		have = append(have, p)
-		cfg.SplitNets = append(cfg.SplitNets, p.String())
-		changed = true
-	}
-	if changed {
-		if err := cfg.Save(); err != nil {
-			return err
-		}
-	}
-	if !split.Available() {
+	l := list(cfg)
+	if slices.Contains(*l, entry) {
 		return nil
 	}
-	for _, p := range ps {
-		if err := split.AddNet(p); err != nil {
-			return err
-		}
+	*l = append(*l, entry)
+	if err := cfg.Save(); err != nil {
+		return err
 	}
-	return nil
+	return syncNets(cfg)
 }
 
-func rmNets(ps []netip.Prefix) error {
+func splitRmEntry(list func(*config.Config) *[]string, entry string) error {
+	return splitRmMatch(list, entry, func(s string) bool { return s == entry })
+}
+
+func splitRmMatch(list func(*config.Config) *[]string, entry string, match func(string) bool) error {
 	release, err := lock.AcquireRoot()
 	if err != nil {
 		return err
@@ -471,83 +480,28 @@ func rmNets(ps []netip.Prefix) error {
 	if err != nil {
 		return err
 	}
-	n := len(cfg.SplitNets)
-	for _, p := range ps {
-		cfg.SplitNets = slices.DeleteFunc(cfg.SplitNets, func(s string) bool { return s == p.String() })
+	l := list(cfg)
+	n := len(*l)
+	*l = slices.DeleteFunc(*l, match)
+	if len(*l) == n {
+		return fmt.Errorf("%s not in the split set (see mvad split list)", entry)
 	}
-	if len(cfg.SplitNets) != n {
-		if err := cfg.Save(); err != nil {
-			return err
-		}
+	if err := cfg.Save(); err != nil {
+		return err
 	}
+	return syncNets(cfg)
+}
+
+// syncNets reconciles the live set with config. When an entry doesn't
+// resolve it refuses to reconcile: flushing addresses on a docker
+// hiccup would strip running containers out of the tunnel.
+func syncNets(cfg *config.Config) error {
 	if !split.Available() {
 		return nil
 	}
-	for _, p := range ps {
-		if err := split.RmNet(p); err != nil {
-			return err
-		}
+	nets, errs := resolveSplitNets(cfg)
+	if len(errs) != 0 {
+		return fmt.Errorf("%w; live set unchanged", errors.Join(errs...))
 	}
-	return nil
-}
-
-func dockerNets(container string) ([]netip.Prefix, error) {
-	out, err := dockerOutput("inspect", "--type", "container", "--format",
-		"{{range .NetworkSettings.Networks}}{{.IPAddress}} {{.GlobalIPv6Address}} {{end}}", container)
-	if err != nil {
-		return nil, err
-	}
-	var ps []netip.Prefix
-	for _, f := range strings.Fields(string(out)) {
-		a, err := netip.ParseAddr(f)
-		if err != nil {
-			continue
-		}
-		ps = append(ps, netip.PrefixFrom(a, a.BitLen()))
-	}
-	return ps, nil
-}
-
-func composeNets(project, service string) ([]netip.Prefix, error) {
-	args := []string{"ps", "-q", "--no-trunc", "--filter", "label=com.docker.compose.project=" + project}
-	if service != "" {
-		args = append(args, "--filter", "label=com.docker.compose.service="+service)
-	}
-	out, err := dockerOutput(args...)
-	if err != nil {
-		return nil, err
-	}
-	ids := strings.Fields(string(out))
-	var ps []netip.Prefix
-	for _, id := range ids {
-		got, err := dockerNets(id)
-		if err != nil {
-			return nil, err
-		}
-		ps = append(ps, got...)
-	}
-	if len(ps) == 0 {
-		what := "project " + project
-		if service != "" {
-			what = "service " + project + "/" + service
-		}
-		return nil, fmt.Errorf("no addressed running containers for compose %s", what)
-	}
-	return ps, nil
-}
-
-func dockerOutput(args ...string) ([]byte, error) {
-	bin, err := exec.LookPath("docker")
-	if err != nil {
-		return nil, errors.New("docker not found in PATH")
-	}
-	cmd := exec.Command(bin, args...)
-	cmd.Env = append(os.Environ(), "LC_ALL=C")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("docker %s: %w: %s", strings.Join(args, " "), err, bytes.TrimSpace(stderr.Bytes()))
-	}
-	return out, nil
+	return split.SetNets(nets)
 }

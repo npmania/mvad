@@ -1,0 +1,9 @@
+[Unit]
+Description=reconcile the mvad split set with docker
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target

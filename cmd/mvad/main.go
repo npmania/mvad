@@ -92,7 +92,7 @@ const (
 	usageLockdownOff     = "usage: mvad lockdown off"
 	usageLockdownRefresh = "usage: mvad lockdown refresh"
 	usageRun             = "usage: mvad run [--] <command> [args...]"
-	usageSplit           = "usage: mvad split <add-pid|rm-pid|add-ip|rm-ip|add-docker|rm-docker|add-compose|rm-compose|list|clear>"
+	usageSplit           = "usage: mvad split <add-pid|rm-pid|add-ip|rm-ip|add-docker|rm-docker|add-compose|rm-compose|refresh|list|clear>"
 	usageSplitAddPID     = "usage: mvad split add-pid <pid>"
 	usageSplitRmPID      = "usage: mvad split rm-pid <pid>"
 	usageSplitAddIP      = "usage: mvad split add-ip <addr|cidr>"
@@ -101,6 +101,7 @@ const (
 	usageSplitRmDocker   = "usage: mvad split rm-docker <container>"
 	usageSplitAddCompose = "usage: mvad split add-compose <project> [<service>]"
 	usageSplitRmCompose  = "usage: mvad split rm-compose <project> [<service>]"
+	usageSplitRefresh    = "usage: mvad split refresh"
 	usageSplitList       = "usage: mvad split list"
 	usageSplitClear      = "usage: mvad split clear"
 )
@@ -803,6 +804,12 @@ func doConnect(opts connectOpts) (retErr error) {
 	if err := checkLoggedIn(cfg); err != nil {
 		return err
 	}
+	// Resolve before any teardown: docker must not stall the window
+	// where the old session's protection is already gone.
+	nets, netErrs := resolveSplitNets(cfg)
+	for _, e := range netErrs {
+		fmt.Fprintf(os.Stderr, "mvad: split: %v; run mvad split refresh once it's up\n", e)
+	}
 	if useSS {
 		if _, err := exec.LookPath("ss-local"); err != nil {
 			return errors.New("ss-local not found — install shadowsocks-libev")
@@ -907,7 +914,7 @@ func doConnect(opts connectOpts) (retErr error) {
 			Iface: ifname,
 			DNS:   mullvadDNS,
 			HasV6: cfg.DeviceIPv6.IsValid(),
-			Nets:  parseNets(cfg.SplitNets),
+			Nets:  nets,
 		}
 		if err := split.Up(scfg); err != nil {
 			wg.Down(ifname)
@@ -985,7 +992,7 @@ func doConnect(opts connectOpts) (retErr error) {
 	}
 	if gwErr != nil {
 		fmt.Fprintf(os.Stderr, "mvad: split-tunnel setup skipped: %v; running without split-tunnel\n", gwErr)
-	} else if err := split.Up(split.Config{Gateway: gw, Gateway6: gw6, Dev: dev, DNS: mullvadDNS, Nets: parseNets(cfg.SplitNets)}); err != nil {
+	} else if err := split.Up(split.Config{Gateway: gw, Gateway6: gw6, Dev: dev, DNS: mullvadDNS, Nets: nets}); err != nil {
 		fmt.Fprintf(os.Stderr, "mvad: split-tunnel setup failed: %v; running without split-tunnel\n", err)
 	}
 	return nil

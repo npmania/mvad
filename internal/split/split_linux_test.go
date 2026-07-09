@@ -68,6 +68,48 @@ func TestBuildScript(t *testing.T) {
 	}
 }
 
+func TestCoalesce(t *testing.T) {
+	got := coalesce([]netip.Prefix{
+		netip.MustParsePrefix("172.18.0.2/32"),
+		netip.MustParsePrefix("172.18.0.0/16"),
+		netip.MustParsePrefix("172.18.0.2/32"),
+		netip.MustParsePrefix("10.0.0.0/8"),
+		netip.MustParsePrefix("fd00::1/128"),
+		netip.MustParsePrefix("fd00::/64"),
+	})
+	want := []netip.Prefix{
+		netip.MustParsePrefix("172.18.0.0/16"),
+		netip.MustParsePrefix("10.0.0.0/8"),
+		netip.MustParsePrefix("fd00::/64"),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+}
+
+func TestBuildScriptCoalescesSeed(t *testing.T) {
+	got := buildScript(Config{
+		Split: true,
+		Iface: "mvad-wg0",
+		DNS:   []netip.Addr{netip.MustParseAddr("10.64.0.1")},
+		Nets: []netip.Prefix{
+			netip.MustParsePrefix("172.18.0.2/32"),
+			netip.MustParsePrefix("172.18.0.0/16"),
+		},
+	})
+	if !strings.Contains(got, "elements = { 172.18.0.0/16 }") {
+		t.Errorf("seed not coalesced\n--- got ---\n%s", got)
+	}
+	if strings.Contains(got, "172.18.0.2/32") {
+		t.Errorf("covered prefix left in seed\n--- got ---\n%s", got)
+	}
+}
+
 func TestBuildScriptSplit(t *testing.T) {
 	got := buildScript(Config{
 		Split: true,

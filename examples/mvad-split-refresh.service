@@ -1,0 +1,7 @@
+[Unit]
+Description=reconcile the mvad split set with docker
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/mvad split refresh

@@ -40,16 +40,15 @@ type Config struct {
 	Nets     []netip.Prefix // source addresses to tag
 }
 
-func Up(c Config) error           { return up(c) }
-func Down() error                 { return down() }
-func AddPID(pid int) error        { return addPID(pid) }
-func RmPID(pid int) error         { return rmPID(pid) }
-func ListPIDs() ([]int, error)    { return listPIDs() }
-func AddNet(p netip.Prefix) error { return addNet(p) }
-func RmNet(p netip.Prefix) error  { return rmNet(p) }
-func Clear() error                { return clear() }
-func Available() bool             { return available() }
-func SplitMode() bool             { return splitMode() }
+func Up(c Config) error               { return up(c) }
+func Down() error                     { return down() }
+func AddPID(pid int) error            { return addPID(pid) }
+func RmPID(pid int) error             { return rmPID(pid) }
+func ListPIDs() ([]int, error)        { return listPIDs() }
+func SetNets(ps []netip.Prefix) error { return setNets(ps) }
+func Clear() error                    { return clear() }
+func Available() bool                 { return available() }
+func SplitMode() bool                 { return splitMode() }
 
 const (
 	CgroupDir = cgroupDir

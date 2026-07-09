@@ -42,16 +42,29 @@ func up(c Config) error {
 	if err := os.MkdirAll(cgroupDir, 0755); err != nil {
 		return fmt.Errorf("split: mkdir %s: %w", cgroupDir, err)
 	}
+	// When replacing a split session with another, a failed install
+	// must not strip what remains of the old one: its rules,
+	// unreachable defaults, and tables (nft -f is atomic) still hold
+	// the set fail-closed.
+	prevSplit := splitMode() && c.Split
+	rollback := func() {
+		if prevSplit {
+			return
+		}
+		_ = delRule()
+		_ = delRoute()
+		_ = nftDel()
+		_ = removeState()
+	}
 	if err := saveState(state{Split: c.Split, Gateway: c.Gateway, Gateway6: c.Gateway6, Dev: c.Dev}); err != nil {
 		return err
 	}
 	if err := runNft(buildScript(c)); err != nil {
-		_ = removeState()
+		rollback()
 		return fmt.Errorf("split: install nft: %w", err)
 	}
 	if err := installRoutes(c); err != nil {
-		_ = nftDel()
-		_ = removeState()
+		rollback()
 		return err
 	}
 	// Reply packets get their mark restored from conntrack in
@@ -59,10 +72,7 @@ func up(c Config) error {
 	// lookup unless src_valid_mark is set. wg-quick does the same, and
 	// like wg-quick this is never reverted: another tunnel may need it.
 	if err := os.WriteFile("/proc/sys/net/ipv4/conf/all/src_valid_mark", []byte("1"), 0644); err != nil {
-		_ = delRule()
-		_ = delRoute()
-		_ = nftDel()
-		_ = removeState()
+		rollback()
 		return fmt.Errorf("split: set src_valid_mark: %w", err)
 	}
 	return nil
@@ -119,33 +129,54 @@ func listPIDs() ([]int, error) {
 	return pids, nil
 }
 
-func addNet(p netip.Prefix) error {
+// setNets replaces the live sets with ps in one nft transaction.
+func setNets(ps []netip.Prefix) error {
 	if !available() {
 		return ErrUnavailable
 	}
-	err := run("nft", "add", "element", famOf(p), tableName, setName, "{ "+p.String()+" }")
-	if err != nil && strings.Contains(err.Error(), "exists") {
-		return nil
+	ps = coalesce(ps)
+	var b strings.Builder
+	for _, fam := range []string{"ip", "ip6"} {
+		v6 := fam == "ip6"
+		fmt.Fprintf(&b, "flush set %s %s %s\n", fam, tableName, setName)
+		var elems []string
+		for _, p := range ps {
+			if p.Addr().Is6() != v6 {
+				continue
+			}
+			elems = append(elems, p.String())
+		}
+		if len(elems) > 0 {
+			fmt.Fprintf(&b, "add element %s %s %s { %s }\n", fam, tableName, setName, strings.Join(elems, ", "))
+		}
 	}
-	return err
+	return runNft(b.String())
 }
 
-func rmNet(p netip.Prefix) error {
-	if !available() {
-		return ErrUnavailable
+// coalesce drops prefixes covered by another so the seeded set never
+// declares conflicting intervals.
+func coalesce(ps []netip.Prefix) []netip.Prefix {
+	var out []netip.Prefix
+	for i, p := range ps {
+		covered := false
+		for j, q := range ps {
+			if i == j || p.Addr().Is6() != q.Addr().Is6() {
+				continue
+			}
+			if q.Bits() < p.Bits() && q.Contains(p.Addr()) {
+				covered = true
+				break
+			}
+			if q == p && j < i {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			out = append(out, p)
+		}
 	}
-	err := run("nft", "delete", "element", famOf(p), tableName, setName, "{ "+p.String()+" }")
-	if err != nil && !notFound(err) {
-		return err
-	}
-	return nil
-}
-
-func famOf(p netip.Prefix) string {
-	if p.Addr().Is6() {
-		return "ip6"
-	}
-	return "ip"
+	return out
 }
 
 func clear() error {
@@ -276,38 +307,36 @@ func nftDel() error {
 	return errors.Join(errs...)
 }
 
+// installRoutes adds rules tolerating ones already there — from a dead
+// tunnel or the session being replaced — so reconnecting never opens a
+// window with the split set unrouted.
 func installRoutes(c Config) error {
-	// A dead tunnel leaves the rules and the unreachable defaults
-	// behind by design; clear them so reinstalling doesn't fail on
-	// "File exists".
-	_ = delRule()
-	_ = delRoute()
 	mark := fmt.Sprintf("%#x", fwmark)
 	tbl := strconv.Itoa(routeTable)
 	for _, fam := range []string{"-4", "-6"} {
 		// Specific routes (LAN, docker bridges) must win over the split
 		// table, or replies to forwarded sources head back out the
 		// default. Same construct as wg-quick.
-		err := run("ip", fam, "rule", "add", "fwmark", mark, "lookup", "main",
+		err := addRule(fam, "fwmark", mark, "lookup", "main",
 			"suppress_prefixlength", "0", "priority", strconv.Itoa(mainPri))
 		if err == nil {
-			err = run("ip", fam, "rule", "add", "fwmark", mark, "lookup", tbl,
+			err = addRule(fam, "fwmark", mark, "lookup", tbl,
 				"priority", strconv.Itoa(rulePri))
 		}
 		if err != nil {
-			_ = delRule()
 			return fmt.Errorf("split: ip %s rule add: %w", fam, err)
 		}
 	}
-	var err error
 	if c.Split {
-		err = installTunnelRoutes(c, tbl)
-	} else {
-		err = installPlainRoutes(c, tbl)
+		return installTunnelRoutes(c, tbl)
 	}
-	if err != nil {
-		_ = delRule()
-		_ = delRoute()
+	return installPlainRoutes(c, tbl)
+}
+
+func addRule(fam string, args ...string) error {
+	err := run("ip", append([]string{fam, "rule", "add"}, args...)...)
+	if err != nil && strings.Contains(err.Error(), "File exists") {
+		return nil
 	}
 	return err
 }
@@ -321,7 +350,7 @@ func installTunnelRoutes(c Config, tbl string) error {
 	// main-table route covers it (a corporate 10/8, say), so it gets a
 	// rule ahead of the suppress rule.
 	if dns := firstV4(c.DNS); dns.IsValid() {
-		err := run("ip", "-4", "rule", "add", "fwmark", fmt.Sprintf("%#x", fwmark),
+		err := addRule("-4", "fwmark", fmt.Sprintf("%#x", fwmark),
 			"to", dns.String()+"/32", "lookup", tbl, "priority", strconv.Itoa(dnsPri))
 		if err != nil {
 			return fmt.Errorf("split: ip -4 rule add: %w", err)
@@ -344,6 +373,13 @@ func installTunnelRoutes(c Config, tbl string) error {
 }
 
 func installPlainRoutes(c Config, tbl string) error {
+	// A dead split session may have left its DNS rule behind; inert in
+	// this mode, but confusing in ip rule output.
+	err := run("ip", "-4", "rule", "del", "fwmark", fmt.Sprintf("%#x", fwmark),
+		"lookup", tbl, "priority", strconv.Itoa(dnsPri))
+	if err != nil && !notFound(err) {
+		return err
+	}
 	if err := run("ip", "-4", "route", "replace", "default", "via", c.Gateway.String(), "dev", c.Dev, "table", tbl); err != nil {
 		return fmt.Errorf("split: ip -4 route replace: %w", err)
 	}
@@ -405,6 +441,7 @@ func notFound(err error) bool {
 }
 
 func buildScript(c Config) string {
+	c.Nets = coalesce(c.Nets)
 	var b strings.Builder
 	// Separate ip and ip6 tables because nftables nat chains aren't
 	// supported in the inet family.

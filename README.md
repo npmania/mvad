@@ -77,11 +77,17 @@ tunnel drops.
 	sudo mvad split add-compose myapp         # whole project
 	sudo mvad split add-compose myapp worker  # one service
 
+docker and compose entries are recorded by name and resolved to
+addresses at every connect; after containers restart with new
+addresses, run `sudo mvad split refresh` to reconcile the live set (a
+deploy hook or timer does fine — the connection itself is untouched).
+Until that refresh runs, the new addresses are not in the tunnel.
+
 Split-mode fine print: destinations with specific routes (the LAN,
 docker networks) stay direct, as do lookups through a loopback stub
-like systemd-resolved or docker's embedded DNS. add-docker/add-compose
-record the container's addresses at add time; after an address change,
-re-add and prune the old entry with `split list` and `rm-ip`.
+like systemd-resolved or docker's embedded DNS. Marked traffic that
+would leave on any other interface is dropped, so a rogue route can't
+pull the split set out of the tunnel.
 
 ### Status
 
