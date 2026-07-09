@@ -208,6 +208,7 @@ type state struct {
 	relayRowsFilter string
 
 	btn     widget.Clickable
+	reconn  widget.Clickable
 	refresh widget.Clickable
 	toggle  widget.Clickable
 
@@ -316,6 +317,7 @@ const (
 	cmdShow trayCmdKind = iota
 	cmdConnect
 	cmdDisconnect
+	cmdReconnect
 	cmdSettings
 	cmdAccount
 	cmdSplit
@@ -526,6 +528,8 @@ func main() {
 						windowed = true
 					case cmdDisconnect:
 						startCmd(&st, nil, "disconnect")
+					case cmdReconnect:
+						startReconnect(&st, nil)
 					default:
 						applyTrayCmd(&st, c)
 						windowed = true
@@ -628,7 +632,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 			st.cmdOut = r.out
 			st.cmdErr = r.err
 			switch r.name {
-			case "connect":
+			case "connect", "reconnect":
 				if r.err == nil {
 					if c, err := config.Load(); err == nil && c != nil {
 						st.cfg = c
@@ -899,6 +903,8 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 				setWindowState(windowState, true)
 			case cmdDisconnect:
 				startCmd(st, w, "disconnect")
+			case cmdReconnect:
+				startReconnect(st, w)
 			default:
 				applyTrayCmd(st, c)
 				w.Option(app.Windowed.Option())
@@ -1230,6 +1236,9 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 					startConnect(st, w, st.selected)
 				}
 			}
+			if !st.running && st.snap.Up && st.reconn.Clicked(gtx) {
+				startReconnect(st, w)
+			}
 			if !st.running && st.loginBtn.Clicked(gtx) {
 				token := strings.TrimSpace(st.loginToken.Text())
 				key := strings.TrimSpace(st.loginKey.Text())
@@ -1505,7 +1514,14 @@ func connectBody(gtx layout.Context, th *material.Theme, st *state, pal palette)
 		layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			if st.snap.Up {
-				return actionButton(gtx, th, &st.btn, pal, "Disconnect", st.running, st.runningName == "disconnect")
+				return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						return actionButton(gtx, th, &st.btn, pal, "Disconnect", st.running, st.runningName == "disconnect")
+					}),
+					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						return actionButton(gtx, th, &st.reconn, pal, "Reconnect", st.running, st.runningName == "reconnect")
+					}),
+				)
 			}
 			return actionButton(gtx, th, &st.btn, pal, "Connect", btnDisabled, st.runningName == "connect")
 		}),
@@ -2810,6 +2826,21 @@ func startConnect(st *state, w *app.Window, relay string) {
 		args = append(args, varg)
 	}
 	args = append(args, "--", relay)
+	go runCmd(st.ctx, w, st.cmdDone, args...)
+}
+
+func startReconnect(st *state, w *app.Window) {
+	if st.running {
+		return
+	}
+	st.cmdErr = nil
+	st.cmdOut = ""
+	st.running = true
+	st.runningName = "reconnect"
+	args := []string{"reconnect"}
+	if st.cfg.AllowLAN {
+		args = append(args, "--allow-lan")
+	}
 	go runCmd(st.ctx, w, st.cmdDone, args...)
 }
 
