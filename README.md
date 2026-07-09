@@ -100,14 +100,28 @@ and swaybar.
 
 ## Files
 
+Everything mvad touches, exhaustively:
+
 - `~/.config/mvad/config.json` — token, device key, relay cache,
   options (0600; written through sudo/pkexec it stays owned by the
   invoking user).
-- `/run/mvad/` — lock, shim pidfiles, split state; gone after reboot.
-- `/var/lib/mvad/lockdown.nft` — persistent kill-switch ruleset.
+- `/run/mvad/` — lock files, shim pidfiles, split state. tmpfs; the
+  lock files linger between sessions and vanish at reboot.
+- `/var/lib/mvad/` — the persistent kill-switch ruleset, only while
+  `lockdown on`; removed by `lockdown off`.
+- `/sys/fs/cgroup/mvad-split` — the split cgroup; removed at
+  disconnect once no member processes remain.
+- Kernel state — the wg interface, nft tables (`inet mvad`,
+  `ip/ip6 mvad-split`, `inet mvad-lockdown`), ip rules 97–99, and
+  routing table 60 — all removed by `sudo mvad disconnect`
+  (`lockdown off` for the lockdown table), even after a crash.
+- The sysctl `net.ipv4.conf.all.src_valid_mark` is set to 1 and, as
+  with wg-quick, left set until reboot: reverting it could break
+  another fwmark-routed tunnel.
 
-Everything else lives in the kernel; if mvad dies mid-session,
-`sudo mvad disconnect` cleans up.
+To purge mvad completely: `sudo mvad disconnect`, `sudo mvad lockdown
+off`, `mvad logout`, then delete `~/.config/mvad` and whatever you
+installed from examples/.
 
 ## examples/
 
