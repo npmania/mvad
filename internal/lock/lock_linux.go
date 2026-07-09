@@ -20,7 +20,7 @@ var (
 	file  *os.File
 )
 
-func acquireRoot() (func(), error) {
+func acquireRoot(block bool) (func(), error) {
 	mu.Lock()
 	defer mu.Unlock()
 	if depth == 0 {
@@ -32,7 +32,11 @@ func acquireRoot() (func(), error) {
 		if err != nil {
 			return nil, fmt.Errorf("lock: open %s: %w", Path, err)
 		}
-		if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		how := unix.LOCK_EX | unix.LOCK_NB
+		if block {
+			how = unix.LOCK_EX
+		}
+		if err := unix.Flock(int(f.Fd()), how); err != nil {
 			f.Close()
 			if errors.Is(err, unix.EWOULDBLOCK) {
 				return nil, ErrLocked

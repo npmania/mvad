@@ -30,11 +30,14 @@ func up(args []string) error {
 	if os.Geteuid() != 0 {
 		return errors.New("this command needs root; rerun with sudo")
 	}
-	release, err := lock.AcquireRoot()
+	// The watch loop holds only its own singleton lock; the transition
+	// lock is taken per reconnect so split management (add-ip, refresh)
+	// can run in between.
+	unlockUp, err := acquireUpLock()
 	if err != nil {
 		return err
 	}
-	defer release()
+	defer unlockUp()
 	opts, err := parseConnectOpts(args, usageUp)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -60,13 +63,13 @@ func up(args []string) error {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
 
-	if err := doConnect(opts); err != nil {
+	if err := locked(func() error { return doConnect(opts) }); err != nil {
 		return err
 	}
 
 	w, err := newRouteWatcher(ifname)
 	if err != nil {
-		doDisconnect()
+		locked(doDisconnect)
 		notify.Send("mvad", "tunnel down")
 		return fmt.Errorf("watch netlink routes: %w", err)
 	}
@@ -75,22 +78,49 @@ func up(args []string) error {
 	for {
 		select {
 		case <-sigCh:
-			doDisconnect()
+			locked(doDisconnect)
 			notify.Send("mvad", "tunnel down")
 			return nil
 		case <-w.events:
 		}
 		// Suspend/resume fires events in clumps; collapse them.
 		if !drainQuiet(w.events, sigCh, 2*time.Second) {
-			doDisconnect()
+			locked(doDisconnect)
 			notify.Send("mvad", "tunnel down")
 			return nil
 		}
 		notify.Send("mvad", "reconnecting to "+opts.relay)
-		doDisconnect()
-		doConnect(opts)
+		locked(func() error {
+			doDisconnect()
+			doConnect(opts)
+			return nil
+		})
 		w.refresh(ifname)
 	}
+}
+
+func locked(f func() error) error {
+	release, err := lock.AcquireRootBlock()
+	if err != nil {
+		return err
+	}
+	defer release()
+	return f()
+}
+
+func acquireUpLock() (func(), error) {
+	if err := os.MkdirAll("/run/mvad", 0700); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile("/run/mvad/up.lock", os.O_RDWR|os.O_CREATE, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		f.Close()
+		return nil, errors.New("mvad up is already running; aborting")
+	}
+	return func() { f.Close() }, nil
 }
 
 func drainQuiet(events <-chan struct{}, sig <-chan os.Signal, d time.Duration) bool {
