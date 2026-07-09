@@ -45,6 +45,25 @@ func unset(iface string, endpoint netip.Addr) error {
 	return errors.Join(err4, err6, errp)
 }
 
+// lanMulticast is the multicast range that outranks the tunnel's default
+// route once pinned to the LAN device. IPv6 link-local multicast (ff02::/16)
+// already resolves to a local interface, so only IPv4 needs pinning.
+const lanMulticast = "224.0.0.0/4"
+
+func setLAN(dev string) error {
+	if dev == "" {
+		return errors.New("route: empty lan device")
+	}
+	return ip("-4", "route", "replace", lanMulticast, "dev", dev)
+}
+
+// unsetLAN removes the pinned multicast route by prefix, without needing
+// to know which device it landed on; teardown order can leave the tunnel
+// owning the default route, so the device is not reliable here.
+func unsetLAN() error {
+	return ipMissingOK("-4", "route", "del", lanMulticast)
+}
+
 func pin(addr netip.Addr) error {
 	gw, dev, err := routeFor(addr)
 	if err != nil {

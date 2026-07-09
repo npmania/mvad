@@ -919,6 +919,13 @@ func doConnect(opts connectOpts) (retErr error) {
 			return fmt.Errorf("start ss-local: %w", err)
 		}
 	}
+	if opts.allowLAN {
+		if dev == "" {
+			fmt.Fprintf(os.Stderr, "mvad: no lan device; multicast discovery stays tunneled\n")
+		} else if err := route.SetLAN(dev); err != nil {
+			fmt.Fprintf(os.Stderr, "mvad: lan multicast route failed: %v\n", err)
+		}
+	}
 	if gwErr != nil {
 		fmt.Fprintf(os.Stderr, "mvad: split-tunnel setup skipped: %v; running without split-tunnel\n", gwErr)
 	} else if err := split.Up(gw, gw6, dev, mullvadDNS); err != nil {
@@ -1015,6 +1022,7 @@ func doDisconnect() error {
 	if err := split.Down(); err != nil {
 		fmt.Fprintf(os.Stderr, "mvad: split-tunnel teardown: %v\n", err)
 	}
+	route.UnsetLAN()
 	return errors.Join(ssStop(), udp2tcpStop(), firewall.Down(), dns.Restore(ifname), route.Unset(ifname, endpoint), wg.Down(ifname))
 }
 

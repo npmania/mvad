@@ -50,6 +50,16 @@ func runNft(script string) error {
 	return nil
 }
 
+// writeLANRules opens the local network in one direction. dir is "daddr"
+// for the output chain, "saddr" for input. It covers private and
+// link-local unicast plus the multicast ranges that LAN service discovery
+// (mDNS, SSDP) needs, for both IP families. IPv6 multicast is scoped to
+// link-local (ff02::/16) so global-scope multicast stays inside the tunnel.
+func writeLANRules(b *strings.Builder, dir string) {
+	fmt.Fprintf(b, "\t\tip %s { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 224.0.0.0/4 } accept\n", dir)
+	fmt.Fprintf(b, "\t\tip6 %s { fe80::/10, ff02::/16 } accept\n", dir)
+}
+
 func buildScript(c Config) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "add table inet %s\n", tableName)
@@ -85,7 +95,7 @@ func buildScript(c Config) string {
 		fmt.Fprintf(&b, "\t\ttcp dport 53 %s daddr %s accept\n", fam, d)
 	}
 	if c.AllowLAN {
-		b.WriteString("\t\tip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } accept\n")
+		writeLANRules(&b, "daddr")
 	}
 	fmt.Fprintf(&b, "\t\tmeta mark %#x accept\n", split.FWMark)
 	b.WriteString("\t}\n")
@@ -96,7 +106,7 @@ func buildScript(c Config) string {
 	fmt.Fprintf(&b, "\t\tiifname %q accept\n", c.Iface)
 	fmt.Fprintf(&b, "\t\t%s sport %d %s saddr %s accept\n", proto, port, relayFam, relay)
 	if c.AllowLAN {
-		b.WriteString("\t\tip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } accept\n")
+		writeLANRules(&b, "saddr")
 	}
 	fmt.Fprintf(&b, "\t\tct mark %#x accept\n", split.FWMark)
 	b.WriteString("\t}\n")
