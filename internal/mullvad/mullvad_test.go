@@ -378,6 +378,21 @@ func TestPick(t *testing.T) {
 	if _, err := Pick(relays, "us-nyc-wg-999"); err == nil {
 		t.Error("missing hostname: want error")
 	}
+	for range 20 {
+		r, err := PickExcept(relays, "us-nyc", "us-nyc-wg-001")
+		if err != nil {
+			t.Fatalf("except: %v", err)
+		}
+		if r.Hostname != "us-nyc-wg-002" {
+			t.Errorf("except pick = %+v, want us-nyc-wg-002", r)
+		}
+	}
+	if r, err := PickExcept(relays, "us-lax", "us-lax-wg-001"); err != nil || r.Hostname != "us-lax-wg-001" {
+		t.Errorf("except sole match = %+v, %v; want us-lax-wg-001", r, err)
+	}
+	if r, err := PickExcept(relays, "us-nyc-wg-001", "us-nyc-wg-001"); err != nil || r.Hostname != "us-nyc-wg-001" {
+		t.Errorf("except exact = %+v, %v; want us-nyc-wg-001", r, err)
+	}
 }
 
 func TestUnauthorizedRetry(t *testing.T) {

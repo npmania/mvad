@@ -38,12 +38,16 @@ CLI alone (`go build ./cmd/mvad`) needs none.
 
 ### Connecting
 
+The relay argument is an exact hostname (`jp-osa-wg-001`) or a prefix
+(`jp`, `jp-osa`) picking a random active relay in that scope.
+
 `connect` replaces the default route with the tunnel, points DNS at
 the in-tunnel resolver, and installs an nftables kill-switch that
 drops anything not headed for the relay. `--allow-lan` opens the
-private ranges. `reconnect` redials the last relay; `up` stays in the
-foreground and reconnects when the default route changes (suspend,
-Wi-Fi roam) — see examples/mvad-up@.service.
+private ranges. `reconnect` re-picks from the last query, avoiding the
+relay it is leaving; `up` stays in the foreground and reconnects when
+the default route changes (suspend, Wi-Fi roam) — see
+examples/mvad-up@.service.
 
 Multihop and censored networks:
 
@@ -89,6 +93,21 @@ like systemd-resolved or docker's embedded DNS. Marked traffic that
 would leave on any other interface is dropped, so a rogue route can't
 pull the split set out of the tunnel.
 
+### Failover
+
+Relays die, and a dead relay makes no noise — the interface stays up
+while traffic goes nowhere. `sudo mvad check` sends a DNS query to the
+in-tunnel resolver through the tunnel (through the split routing in
+split mode): exit 0 when it answers, 1 when the tunnel is dead, 3 when
+there is no tunnel. examples/mvad-check.timer runs check every minute
+and reconnects only on a dead tunnel, so a deliberate disconnect stays
+down. reconnect re-picks within the original query's scope avoiding
+both hops it is leaving: connect with `jp-osa` and a dead relay is
+replaced by another Osaka relay. An exact-hostname session has nowhere
+to fail over to and just redials. The probe holds no lock, so in rare
+timing a failover can replace a relay you picked manually seconds
+earlier; the next tick settles it.
+
 ### Status
 
 	mvad status                    # plain text; exit 1 when down
@@ -126,5 +145,6 @@ installed from examples/.
 ## examples/
 
 Unit files for systemd, OpenRC, runit, and rc.local covering the
-tunnel (mvad-up@), split mode (mvad-split@), and lockdown; a .desktop
-entry, polkit policy, tray icon, and a tmpfiles.d entry.
+tunnel (mvad-up@), split mode (mvad-split@), lockdown, and the
+failover and split-refresh timers; a .desktop entry, polkit policy,
+tray icon, and a tmpfiles.d entry.

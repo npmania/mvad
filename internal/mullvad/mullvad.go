@@ -443,6 +443,13 @@ func (c *Client) do(req *http.Request, out any) error {
 // full hostname; with 1 or 2 segments it is a country or country-city
 // prefix and Pick returns a random active match.
 func Pick(relays []Relay, query string) (Relay, error) {
+	return PickExcept(relays, query, "")
+}
+
+// PickExcept is Pick preferring matches other than except — the relay
+// being failed away from. An exact-hostname query ignores except, as
+// does a prefix matching nothing else.
+func PickExcept(relays []Relay, query, except string) (Relay, error) {
 	if query == "" {
 		return Relay{}, errors.New("mullvad: empty relay query")
 	}
@@ -455,11 +462,18 @@ func Pick(relays []Relay, query string) (Relay, error) {
 		return Relay{}, fmt.Errorf("mullvad: relay %q not found", query)
 	}
 	prefix := query + "-"
-	var match []Relay
+	var match, others []Relay
 	for _, r := range relays {
-		if r.Active && strings.HasPrefix(r.Hostname, prefix) {
-			match = append(match, r)
+		if !r.Active || !strings.HasPrefix(r.Hostname, prefix) {
+			continue
 		}
+		match = append(match, r)
+		if r.Hostname != except {
+			others = append(others, r)
+		}
+	}
+	if len(others) > 0 {
+		match = others
 	}
 	if len(match) == 0 {
 		return Relay{}, fmt.Errorf("mullvad: no relays match %q", query)

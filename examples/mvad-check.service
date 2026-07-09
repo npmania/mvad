@@ -1,0 +1,10 @@
+[Unit]
+Description=probe the mvad tunnel and fail over
+
+[Service]
+Type=oneshot
+# KillMode: reconnect may spawn transport shims that must outlive this unit.
+KillMode=process
+# Reconnect only on a dead tunnel (exit 1); a deliberate disconnect (exit 3)
+# stays disconnected.
+ExecStart=/bin/sh -c '/usr/bin/mvad check && exit 0; [ "$?" -eq 1 ] && exec /usr/bin/mvad reconnect; exit 0'

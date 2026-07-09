@@ -89,6 +89,13 @@ func up(args []string) error {
 			notify.Send("mvad", "tunnel down")
 			return nil
 		}
+		// A changed ifindex means another invocation (a failover
+		// timer's reconnect) rebuilt the tunnel; the route churn was
+		// its own doing.
+		if iff, err := net.InterfaceByName(ifname); err == nil && iff.Index != int(w.self.Load()) {
+			w.refresh(ifname)
+			continue
+		}
 		notify.Send("mvad", "reconnecting to "+opts.relay)
 		locked(func() error {
 			doDisconnect()

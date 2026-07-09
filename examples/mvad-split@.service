@@ -11,4 +11,4 @@ ExecStop=/usr/bin/mvad disconnect
 
 [Install]
 WantedBy=multi-user.target
-DefaultInstance=se-got-wg-001
+DefaultInstance=se-got

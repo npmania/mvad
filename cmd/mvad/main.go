@@ -67,6 +67,7 @@ The commands are:
 	lockdown    install or remove the persistent kill-switch
 	run         run a command in the split set via cgroup v2
 	split       manage the split set
+	check       probe that the tunnel carries traffic
 	status      print connection status
 	version     print version
 
@@ -87,6 +88,7 @@ const (
 	usageUp              = "usage: mvad up [--allow-lan] [--via <entry>] [--transport wireguard|tcp|shadowsocks [--port 80|443|5001] [--bridge <host>]] <relay>"
 	usageDisconnect      = "usage: mvad disconnect"
 	usageStatus          = "usage: mvad status [--format json|waybar] [--refresh]"
+	usageCheck           = "usage: mvad check"
 	usageLockdown        = "usage: mvad lockdown <on|off|refresh>"
 	usageLockdownOn      = "usage: mvad lockdown on"
 	usageLockdownOff     = "usage: mvad lockdown off"
@@ -188,6 +190,8 @@ func main() {
 		err = runCmd(args)
 	case "split":
 		err = splitCmd(args)
+	case "check":
+		err = checkCmd(args)
 	case "status":
 		err = showStatus(args)
 	case "version":
@@ -700,6 +704,8 @@ func pickBridge(bs []mullvad.Bridge, name string) (mullvad.Bridge, error) {
 type connectOpts struct {
 	relay     string
 	via       string
+	avoid     string // exit relay being failed away from
+	avoidVia  string // entry relay being failed away from
 	allowLAN  bool
 	split     bool
 	transport string
@@ -819,14 +825,14 @@ func doConnect(opts connectOpts) (retErr error) {
 	if err != nil {
 		return fmt.Errorf("parse stored private key: %w (run mvad rotate-key to regenerate)", err)
 	}
-	exit, err := pickRelay(cfg, opts.relay)
+	exit, err := pickRelay(cfg, opts.relay, opts.avoid)
 	if err != nil {
 		return fmt.Errorf("pick exit relay: %w (run mvad relays --refresh to update the cache)", err)
 	}
 	endpoint := netip.AddrPortFrom(exit.IPv4, wireguardPort)
 	entryHost := ""
 	if opts.via != "" {
-		entry, err := pickRelay(cfg, opts.via)
+		entry, err := pickRelay(cfg, opts.via, opts.avoidVia)
 		if err != nil {
 			return fmt.Errorf("pick entry relay: %w (run mvad relays --refresh to update the cache)", err)
 		}
@@ -871,6 +877,7 @@ func doConnect(opts connectOpts) (retErr error) {
 	cfg.LastTransportPort = 0
 	cfg.LastBridge = ""
 	cfg.LastSplit = opts.split
+	cfg.LastAllowLAN = opts.allowLAN
 	if useTCP {
 		cfg.LastTransport = "tcp"
 		cfg.LastTransportPort = opts.tcpPort
@@ -1055,10 +1062,13 @@ func reconnect(args []string) error {
 	if via == "" {
 		via = cfg.LastEntryRelay
 	}
+	// A dead tunnel doesn't say which hop failed, so rotate both.
 	opts := connectOpts{
 		relay:     relay,
 		via:       via,
-		allowLAN:  *allowLAN,
+		avoid:     cfg.LastRelay,
+		avoidVia:  cfg.LastEntryRelay,
+		allowLAN:  *allowLAN || cfg.LastAllowLAN,
 		split:     cfg.LastSplit,
 		transport: "wireguard",
 	}
@@ -1438,7 +1448,7 @@ func ssAlive(pid int) bool {
 	return filepath.Base(target) == "ss-local"
 }
 
-func pickRelay(cfg *config.Config, query string) (mullvad.Relay, error) {
+func pickRelay(cfg *config.Config, query, avoid string) (mullvad.Relay, error) {
 	if len(cfg.RelayCache) == 0 {
 		return mullvad.Relay{}, errors.New("no cached relays; run mvad relays")
 	}
@@ -1446,5 +1456,5 @@ func pickRelay(cfg *config.Config, query string) (mullvad.Relay, error) {
 	if err := json.Unmarshal(cfg.RelayCache, &relays); err != nil {
 		return mullvad.Relay{}, err
 	}
-	return mullvad.Pick(relays, query)
+	return mullvad.PickExcept(relays, query, avoid)
 }

@@ -29,6 +29,7 @@ type Config struct {
 	LastTransportPort uint16          `json:"last_transport_port,omitempty"`
 	LastBridge        string          `json:"last_bridge,omitempty"`
 	LastSplit         bool            `json:"last_split,omitempty"`
+	LastAllowLAN      bool            `json:"last_allow_lan,omitempty"`
 	RelayCache        json.RawMessage `json:"relay_cache,omitempty"`
 	RelaysFetchedAt   time.Time       `json:"relays_fetched_at,omitzero"`
 	AccountExpiry     time.Time       `json:"account_expiry,omitzero"`
