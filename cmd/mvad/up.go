@@ -43,6 +43,11 @@ func up(args []string) error {
 		}
 		return err
 	}
+	// Split mode survives route changes on its own, and docker link
+	// churn would trip the watcher into reconnect loops.
+	if opts.split {
+		return usagef("mvad up does not support --split; use mvad connect --split")
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return err

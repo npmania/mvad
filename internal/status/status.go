@@ -21,6 +21,7 @@ type Snapshot struct {
 	PeerEndpoint  netip.AddrPort
 	Relay         string
 	Entry         string
+	Split         bool
 	RxBytes       int64
 	TxBytes       int64
 	LastHandshake time.Time
@@ -48,6 +49,9 @@ func Plain(s Snapshot) string {
 		if s.Entry != "" {
 			via = " via " + s.Entry
 		}
+		if s.Split {
+			via += " (split)"
+		}
 		if s.LastHandshake.IsZero() {
 			fmt.Fprintf(&b, "connected to %s%s, no handshake yet\n", name, via)
 		} else {
@@ -71,6 +75,7 @@ type JSONOut struct {
 	Connected     bool   `json:"connected"`
 	Relay         string `json:"relay,omitempty"`
 	Entry         string `json:"entry,omitempty"`
+	Split         bool   `json:"split,omitempty"`
 	Endpoint      string `json:"endpoint,omitempty"`
 	OperState     string `json:"operstate,omitempty"`
 	Iface         string `json:"iface,omitempty"`
@@ -86,6 +91,7 @@ func JSON(s Snapshot) (string, error) {
 		Connected: s.Up,
 		Relay:     s.Relay,
 		Entry:     s.Entry,
+		Split:     s.Up && s.Split,
 		OperState: s.OperState,
 		Iface:     s.Iface,
 		RxBytes:   s.RxBytes,
@@ -125,6 +131,9 @@ func Waybar(s Snapshot) (string, error) {
 		tip := "connected to " + name
 		if s.Entry != "" {
 			tip += " via " + s.Entry
+		}
+		if s.Split {
+			tip += " (split)"
 		}
 		if s.TxBytes != 0 || s.RxBytes != 0 {
 			tip += fmt.Sprintf("\n%s ↑ / %s ↓", HumanBytes(s.TxBytes), HumanBytes(s.RxBytes))

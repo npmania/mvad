@@ -1,0 +1,14 @@
+[Unit]
+Description=mvad split tunnel to %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/mvad connect --split %i
+ExecStop=/usr/bin/mvad disconnect
+
+[Install]
+WantedBy=multi-user.target
+DefaultInstance=se-got-wg-001

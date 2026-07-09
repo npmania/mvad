@@ -65,8 +65,8 @@ The commands are:
 	reconnect   reconnect to the last relay
 	up          stay connected; reconnect on default-route changes
 	lockdown    install or remove the persistent kill-switch
-	run         run a command outside the tunnel via cgroup v2
-	split       manage the split-tunnel cgroup
+	run         run a command in the split set via cgroup v2
+	split       manage the split set
 	status      print connection status
 	version     print version
 
@@ -82,7 +82,7 @@ const (
 	usageDevicesRemove   = "usage: mvad devices remove <id>"
 	usageRotateKey       = "usage: mvad rotate-key"
 	usageRelays          = "usage: mvad relays [--bridges] [--refresh] [--json] [--country C]... [--city C]... [--provider P]... [--owned true|false] [--protocol wireguard]"
-	usageConnect         = "usage: mvad connect [--allow-lan] [--via <entry>] [--transport wireguard|tcp|shadowsocks [--port 80|443|5001] [--bridge <host>]] <relay>"
+	usageConnect         = "usage: mvad connect [--split] [--allow-lan] [--via <entry>] [--transport wireguard|tcp|shadowsocks [--port 80|443|5001] [--bridge <host>]] <relay>"
 	usageReconnect       = "usage: mvad reconnect [--allow-lan]"
 	usageUp              = "usage: mvad up [--allow-lan] [--via <entry>] [--transport wireguard|tcp|shadowsocks [--port 80|443|5001] [--bridge <host>]] <relay>"
 	usageDisconnect      = "usage: mvad disconnect"
@@ -92,9 +92,15 @@ const (
 	usageLockdownOff     = "usage: mvad lockdown off"
 	usageLockdownRefresh = "usage: mvad lockdown refresh"
 	usageRun             = "usage: mvad run [--] <command> [args...]"
-	usageSplit           = "usage: mvad split <add-pid|rm-pid|list|clear>"
+	usageSplit           = "usage: mvad split <add-pid|rm-pid|add-ip|rm-ip|add-docker|rm-docker|add-compose|rm-compose|list|clear>"
 	usageSplitAddPID     = "usage: mvad split add-pid <pid>"
 	usageSplitRmPID      = "usage: mvad split rm-pid <pid>"
+	usageSplitAddIP      = "usage: mvad split add-ip <addr|cidr>"
+	usageSplitRmIP       = "usage: mvad split rm-ip <addr|cidr>"
+	usageSplitAddDocker  = "usage: mvad split add-docker <container>"
+	usageSplitRmDocker   = "usage: mvad split rm-docker <container>"
+	usageSplitAddCompose = "usage: mvad split add-compose <project> [<service>]"
+	usageSplitRmCompose  = "usage: mvad split rm-compose <project> [<service>]"
 	usageSplitList       = "usage: mvad split list"
 	usageSplitClear      = "usage: mvad split clear"
 )
@@ -694,6 +700,7 @@ type connectOpts struct {
 	relay     string
 	via       string
 	allowLAN  bool
+	split     bool
 	transport string
 	tcpPort   uint16
 	bridge    string
@@ -704,6 +711,7 @@ func parseConnectOpts(args []string, usage string) (connectOpts, error) {
 	fs := flag.NewFlagSet("", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.BoolVar(&o.allowLAN, "allow-lan", false, "allow traffic to private LAN ranges")
+	fs.BoolVar(&o.split, "split", false, "route only the split set through the tunnel")
 	fs.StringVar(&o.via, "via", "", "entry relay for multihop")
 	fs.StringVar(&o.transport, "transport", "wireguard", "transport: wireguard, tcp, or shadowsocks")
 	tcpPort := fs.Uint("port", 5001, "udp2tcp gateway TCP port (80, 443, or 5001)")
@@ -735,6 +743,9 @@ func parseConnectOpts(args []string, usage string) (connectOpts, error) {
 	}
 	if o.transport != "shadowsocks" && o.bridge != "" {
 		return o, usagef("--bridge requires --transport shadowsocks")
+	}
+	if o.split && o.allowLAN {
+		return o, usagef("--allow-lan does not apply to --split; the rest of the system stays plain")
 	}
 	return o, nil
 }
@@ -770,11 +781,19 @@ func doConnect(opts connectOpts) (retErr error) {
 			return
 		}
 		if retErr == nil {
-			notify.Send("mvad", "connected to "+opts.relay)
+			msg := "connected to " + opts.relay
+			if opts.split {
+				msg += " (split)"
+			}
+			notify.Send("mvad", msg)
 		} else {
 			notify.Send("mvad: connect failed", retErr.Error())
 		}
 	}()
+	if opts.split && lockdown.Active() {
+		return errors.New("lockdown blocks all plain traffic; run mvad lockdown off first")
+	}
+	escapeSplitCgroup()
 	useTCP := opts.transport == "tcp"
 	useSS := opts.transport == "shadowsocks"
 	cfg, err := config.Load()
@@ -844,6 +863,7 @@ func doConnect(opts connectOpts) (retErr error) {
 	cfg.LastTransport = ""
 	cfg.LastTransportPort = 0
 	cfg.LastBridge = ""
+	cfg.LastSplit = opts.split
 	if useTCP {
 		cfg.LastTransport = "tcp"
 		cfg.LastTransportPort = opts.tcpPort
@@ -852,7 +872,15 @@ func doConnect(opts connectOpts) (retErr error) {
 		cfg.LastTransport = "shadowsocks"
 		cfg.LastBridge = ssBridge.Hostname
 	}
-	if snap, _ := status.Read(ifname); snap.Up {
+	if opts.split {
+		// Tear down any previous session but keep the split routing in
+		// place: the fail-closed table must hold until the new one
+		// replaces it, and a dead full-tunnel session leaves its
+		// kill-switch and DNS behind for this to clear.
+		if err := doTeardown(); err != nil {
+			return fmt.Errorf("tear down existing state: %w", err)
+		}
+	} else if snap, _ := status.Read(ifname); snap.Up {
 		if err := doDisconnect(); err != nil {
 			return fmt.Errorf("disconnect existing tunnel: %w", err)
 		}
@@ -872,6 +900,35 @@ func doConnect(opts connectOpts) (retErr error) {
 	}
 	if err := wg.Up(wcfg); err != nil {
 		return fmt.Errorf("configure wireguard interface: %w (is the wireguard kernel module loaded?)", err)
+	}
+	if opts.split {
+		scfg := split.Config{
+			Split: true,
+			Iface: ifname,
+			DNS:   mullvadDNS,
+			HasV6: cfg.DeviceIPv6.IsValid(),
+			Nets:  parseNets(cfg.SplitNets),
+		}
+		if err := split.Up(scfg); err != nil {
+			wg.Down(ifname)
+			return fmt.Errorf("install split routing: %w", err)
+		}
+		if useTCP {
+			if err := udp2tcpStart(udp2tcpLocalPort, endpoint); err != nil {
+				split.Down()
+				wg.Down(ifname)
+				return fmt.Errorf("start udp2tcp shim: %w", err)
+			}
+		}
+		if useSS {
+			wgPeer := netip.AddrPortFrom(exit.IPv4, wireguardPort)
+			if err := ssStart(shadowsocksLocalPort, ssBridge.IPv4, ssEnd, wgPeer); err != nil {
+				split.Down()
+				wg.Down(ifname)
+				return fmt.Errorf("start ss-local: %w", err)
+			}
+		}
+		return nil
 	}
 	gw, dev, gwErr := route.Default()
 	gw6, dev6, _ := route.Default6()
@@ -928,10 +985,23 @@ func doConnect(opts connectOpts) (retErr error) {
 	}
 	if gwErr != nil {
 		fmt.Fprintf(os.Stderr, "mvad: split-tunnel setup skipped: %v; running without split-tunnel\n", gwErr)
-	} else if err := split.Up(gw, gw6, dev, mullvadDNS); err != nil {
+	} else if err := split.Up(split.Config{Gateway: gw, Gateway6: gw6, Dev: dev, DNS: mullvadDNS, Nets: parseNets(cfg.SplitNets)}); err != nil {
 		fmt.Fprintf(os.Stderr, "mvad: split-tunnel setup failed: %v; running without split-tunnel\n", err)
 	}
 	return nil
+}
+
+func parseNets(ss []string) []netip.Prefix {
+	var ps []netip.Prefix
+	for _, s := range ss {
+		p, err := netip.ParsePrefix(s)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mvad: skipping bad split net %q\n", s)
+			continue
+		}
+		ps = append(ps, p)
+	}
+	return ps
 }
 
 func reconnect(args []string) error {
@@ -982,7 +1052,12 @@ func reconnect(args []string) error {
 		relay:     relay,
 		via:       via,
 		allowLAN:  *allowLAN,
+		split:     cfg.LastSplit,
 		transport: "wireguard",
+	}
+	if opts.split && opts.allowLAN {
+		fmt.Fprintln(os.Stderr, "mvad: --allow-lan ignored in split mode")
+		opts.allowLAN = false
 	}
 	switch cfg.LastTransport {
 	case "tcp":
@@ -1015,12 +1090,16 @@ func disconnect(args []string) error {
 }
 
 func doDisconnect() error {
+	if err := split.Down(); err != nil {
+		fmt.Fprintf(os.Stderr, "mvad: split-tunnel teardown: %v\n", err)
+	}
+	return doTeardown()
+}
+
+func doTeardown() error {
 	var endpoint netip.Addr
 	if cfg, err := config.Load(); err == nil {
 		endpoint = cfg.LastEndpoint.Addr()
-	}
-	if err := split.Down(); err != nil {
-		fmt.Fprintf(os.Stderr, "mvad: split-tunnel teardown: %v\n", err)
 	}
 	route.UnsetLAN()
 	return errors.Join(ssStop(), udp2tcpStop(), firewall.Down(), dns.Restore(ifname), route.Unset(ifname, endpoint), wg.Down(ifname))
@@ -1064,6 +1143,9 @@ func lockdownOn(args []string) error {
 		return err
 	}
 	defer release()
+	if split.SplitMode() {
+		return errors.New("split mode active; lockdown blocks all plain traffic (disconnect first)")
+	}
 	ips, err := loadRelayIPs()
 	if err != nil {
 		return err
@@ -1163,6 +1245,7 @@ func showStatus(args []string) error {
 	}
 	s.Relay = cfg.LastRelay
 	s.Entry = cfg.LastEntryRelay
+	s.Split = cfg.LastSplit
 	s.AccountExpiry = cfg.AccountExpiry
 	s.DeviceName = cfg.DeviceName
 	var out string

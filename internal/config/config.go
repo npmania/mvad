@@ -28,6 +28,7 @@ type Config struct {
 	LastTransport     string          `json:"last_transport,omitempty"`
 	LastTransportPort uint16          `json:"last_transport_port,omitempty"`
 	LastBridge        string          `json:"last_bridge,omitempty"`
+	LastSplit         bool            `json:"last_split,omitempty"`
 	RelayCache        json.RawMessage `json:"relay_cache,omitempty"`
 	RelaysFetchedAt   time.Time       `json:"relays_fetched_at,omitzero"`
 	AccountExpiry     time.Time       `json:"account_expiry,omitzero"`
@@ -40,6 +41,7 @@ type Config struct {
 	SplitOtherOpen    bool            `json:"split_other_open,omitempty"`
 	Favorites         []string        `json:"favorites,omitempty"`
 	SplitApps         []string        `json:"split_apps,omitempty"`
+	SplitNets         []string        `json:"split_nets,omitempty"`
 }
 
 func path() (string, error) {
