@@ -1327,7 +1327,7 @@ func udp2tcpStart(localPort int, remote netip.AddrPort) error {
 		return err
 	}
 	cmd := exec.Command(self, "__udp2tcp", strconv.Itoa(localPort), remote.String())
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.SysProcAttr = setsidAttr()
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -1388,7 +1388,7 @@ func ssStart(localPort int, bridge netip.Addr, ss mullvad.ShadowsocksEndpoint, p
 		"-m", ss.Cipher,
 		"-k", ss.Password,
 	)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.SysProcAttr = setsidAttr()
 	if err := cmd.Start(); err != nil {
 		return err
 	}
