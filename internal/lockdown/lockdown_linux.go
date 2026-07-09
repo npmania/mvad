@@ -58,9 +58,14 @@ func refresh(relayIPs []netip.Addr) error {
 	return nil
 }
 
+// The marker lives on tmpfs and misses tables installed by the boot
+// scripts, so fall back to asking the kernel; unprivileged callers
+// keep the marker-only answer.
 func active() bool {
-	_, err := os.Stat(markerPath)
-	return err == nil
+	if _, err := os.Stat(markerPath); err == nil {
+		return true
+	}
+	return tablePresent()
 }
 
 func writeMarker() {
