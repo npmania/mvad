@@ -2085,6 +2085,9 @@ func headline(st *state, pal palette) (string, color.NRGBA) {
 		return "Loading…", pal.muted
 	}
 	if st.snap.Up {
+		if st.snap.Split {
+			return "Connected (split)", pal.accent
+		}
 		return "Connected", pal.accent
 	}
 	return "Disconnected", pal.fg
@@ -2731,6 +2734,7 @@ func readStatus() (status.Snapshot, error) {
 	if cfg, cerr := config.Load(); cerr == nil {
 		s.Relay = cfg.LastRelay
 		s.Entry = cfg.LastEntryRelay
+		s.Split = cfg.LastSplit
 		s.AccountExpiry = cfg.AccountExpiry
 		s.DeviceName = cfg.DeviceName
 	}
