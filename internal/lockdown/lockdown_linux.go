@@ -35,6 +35,7 @@ func off() error {
 	if delErr == nil {
 		removeMarker()
 	}
+	_ = os.Remove(filepath.Dir(scriptPath))
 	return errors.Join(delErr, rmErr)
 }
 

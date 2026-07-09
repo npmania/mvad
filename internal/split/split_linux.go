@@ -82,7 +82,11 @@ func down() error {
 	if _, err := os.Stat(stateFile); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	return errors.Join(delRule(), delRoute(), nftDel(), removeState())
+	err := errors.Join(delRule(), delRoute(), nftDel(), removeState())
+	// Gone only when no member pids remain; occupied membership
+	// survives for the next connect.
+	_ = os.Remove(cgroupDir)
+	return err
 }
 
 func addPID(pid int) error {
