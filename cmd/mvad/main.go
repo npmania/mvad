@@ -50,6 +50,11 @@ var udp2tcpPorts = map[uint16]bool{80: true, 443: true, 5001: true}
 
 var mullvadDNS = []netip.Addr{netip.MustParseAddr("10.64.0.1")}
 
+// splitDNS adds dns.mullvad.net for the v6 rewrite: there is no
+// in-tunnel v6 resolver, but the public one is only ever reached
+// through the tunnel.
+var splitDNS = []netip.Addr{netip.MustParseAddr("10.64.0.1"), netip.MustParseAddr("2a07:e340::2")}
+
 const usageText = `usage: mvad <command> [arguments]
 
 The commands are:
@@ -933,7 +938,7 @@ func doConnect(opts connectOpts) (retErr error) {
 		scfg := split.Config{
 			Split: true,
 			Iface: ifname,
-			DNS:   mullvadDNS,
+			DNS:   splitDNS,
 			HasV6: cfg.DeviceIPv6.IsValid(),
 			Nets:  nets,
 		}
@@ -1013,7 +1018,7 @@ func doConnect(opts connectOpts) (retErr error) {
 	}
 	if gwErr != nil {
 		fmt.Fprintf(os.Stderr, "mvad: split-tunnel setup skipped: %v; running without split-tunnel\n", gwErr)
-	} else if err := split.Up(split.Config{Iface: ifname, Gateway: gw, Gateway6: gw6, Dev: dev, DNS: mullvadDNS, Nets: nets}); err != nil {
+	} else if err := split.Up(split.Config{Iface: ifname, Gateway: gw, Gateway6: gw6, Dev: dev, DNS: splitDNS, Nets: nets}); err != nil {
 		fmt.Fprintf(os.Stderr, "mvad: split-tunnel setup failed: %v; running without split-tunnel\n", err)
 	}
 	return nil

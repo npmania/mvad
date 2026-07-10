@@ -114,8 +114,11 @@ func TestBuildScriptSplit(t *testing.T) {
 	got := buildScript(Config{
 		Split: true,
 		Iface: "mvad-wg0",
-		DNS:   []netip.Addr{netip.MustParseAddr("10.64.0.1")},
-		Nets:  []netip.Prefix{netip.MustParsePrefix("172.18.0.2/32")},
+		DNS: []netip.Addr{
+			netip.MustParseAddr("10.64.0.1"),
+			netip.MustParseAddr("2a07:e340::2"),
+		},
+		Nets: []netip.Prefix{netip.MustParsePrefix("172.18.0.2/32")},
 	})
 	wants := []string{
 		"ct direction reply return",
@@ -131,8 +134,9 @@ func TestBuildScriptSplit(t *testing.T) {
 		"meta mark 0xca6c udp dport 53 dnat to 10.64.0.1",
 		"meta mark 0xca6c tcp dport 53 dnat to 10.64.0.1",
 		"ip6 daddr @net accept",
-		"meta mark 0xca6c udp dport 53 reject",
-		"meta mark 0xca6c tcp dport 53 reject",
+		"ip6 daddr ::1 accept",
+		"meta mark 0xca6c udp dport 53 dnat to 2a07:e340::2",
+		"meta mark 0xca6c tcp dport 53 dnat to 2a07:e340::2",
 		"type filter hook forward priority 0;",
 		`oifname "lo" accept`,
 		`oifname "mvad-wg0" accept`,
@@ -149,14 +153,18 @@ func TestBuildScriptSplit(t *testing.T) {
 	if strings.Contains(got, "daddr 10.64.0.1 return") {
 		t.Errorf("tunnel-DNS exemption in split script\n--- got ---\n%s", got)
 	}
-	_, v6Table, ok := strings.Cut(got, "table ip6 mvad-split")
+	if strings.Contains(got, "reject") {
+		t.Errorf("reject left in split script; DNS is rewritten now\n--- got ---\n%s", got)
+	}
+	v4Table, v6Table, ok := strings.Cut(got, "table ip6 mvad-split")
 	if !ok {
 		t.Fatalf("ip6 table missing\n--- got ---\n%s", got)
 	}
-	if strings.Contains(v6Table, "dnat") {
+	if strings.Contains(v4Table, "2a07:e340::2") {
+		t.Errorf("v6 dnat leaked into ip-family script\n--- got ---\n%s", got)
+	}
+	if strings.Contains(v6Table, "dnat to 10.64.0.1") {
 		t.Errorf("v4 dnat leaked into ip6-family script\n--- got ---\n%s", got)
 	}
-	if !strings.Contains(v6Table, "reject") {
-		t.Errorf("v6 DNS reject missing\n--- got ---\n%s", got)
-	}
 }
+

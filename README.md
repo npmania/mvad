@@ -72,8 +72,8 @@ add-ip/add-docker/add-compose` — is the traffic separated from the
 rest. A plain `connect` tunnels everything and the split set bypasses
 the tunnel. `connect --split` inverts that: the system stays on the
 plain network and only the split set is tunneled, with its port-53 DNS
-rewritten to the in-tunnel resolver and a fail-closed route if the
-tunnel drops.
+rewritten to Mullvad resolvers and a fail-closed route if the tunnel
+drops.
 
 	sudo mvad connect --split se-got-wg-001
 	sudo mvad run -- curl https://am.i.mullvad.net/connected

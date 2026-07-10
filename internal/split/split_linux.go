@@ -404,14 +404,21 @@ func addRule(fam string, args ...string) error {
 // traffic fails closed instead of falling through to the plain default
 // route if the tunnel disappears.
 func installTunnelRoutes(c Config, tbl string) error {
-	// The DNS rewrite target must reach the tunnel even when a
-	// main-table route covers it (a corporate 10/8, say), so it gets a
-	// rule ahead of the suppress rule.
-	if dns := firstV4(c.DNS); dns.IsValid() {
-		err := addRule("-4", "fwmark", fmt.Sprintf("%#x", fwmark),
-			"to", dns.String()+"/32", "lookup", tbl, "priority", strconv.Itoa(dnsPri))
+	// The DNS rewrite targets must reach the tunnel even when a
+	// main-table route covers them (a corporate 10/8, say), so they
+	// get rules ahead of the suppress rule.
+	for _, dns := range []netip.Addr{firstV4(c.DNS), firstV6(c.DNS)} {
+		if !dns.IsValid() {
+			continue
+		}
+		fam, bits := "-4", 32
+		if dns.Is6() {
+			fam, bits = "-6", 128
+		}
+		err := addRule(fam, "fwmark", fmt.Sprintf("%#x", fwmark),
+			"to", fmt.Sprintf("%s/%d", dns, bits), "lookup", tbl, "priority", strconv.Itoa(dnsPri))
 		if err != nil {
-			return fmt.Errorf("split: ip -4 rule add: %w", err)
+			return fmt.Errorf("split: ip %s rule add: %w", fam, err)
 		}
 	}
 	for _, fam := range []string{"-4", "-6"} {
@@ -431,12 +438,14 @@ func installTunnelRoutes(c Config, tbl string) error {
 }
 
 func installPlainRoutes(c Config, tbl string) error {
-	// A dead split session may have left its DNS rule behind; inert in
+	// A dead split session may have left its DNS rules behind; inert in
 	// this mode, but confusing in ip rule output.
-	err := run("ip", "-4", "rule", "del", "fwmark", fmt.Sprintf("%#x", fwmark),
-		"lookup", tbl, "priority", strconv.Itoa(dnsPri))
-	if err != nil && !notFound(err) {
-		return err
+	for _, fam := range []string{"-4", "-6"} {
+		err := run("ip", fam, "rule", "del", "fwmark", fmt.Sprintf("%#x", fwmark),
+			"lookup", tbl, "priority", strconv.Itoa(dnsPri))
+		if err != nil && !notFound(err) {
+			return err
+		}
 	}
 	if err := run("ip", "-4", "route", "replace", "default", "via", c.Gateway.String(), "dev", c.Dev, "table", tbl); err != nil {
 		return fmt.Errorf("split: ip -4 route replace: %w", err)
@@ -460,10 +469,12 @@ func delRule() error {
 	mark := fmt.Sprintf("%#x", fwmark)
 	tbl := strconv.Itoa(routeTable)
 	var errs []error
-	err := run("ip", "-4", "rule", "del", "fwmark", mark, "lookup", tbl,
-		"priority", strconv.Itoa(dnsPri))
-	if err != nil && !notFound(err) {
-		errs = append(errs, err)
+	for _, fam := range []string{"-4", "-6"} {
+		err := run("ip", fam, "rule", "del", "fwmark", mark, "lookup", tbl,
+			"priority", strconv.Itoa(dnsPri))
+		if err != nil && !notFound(err) {
+			errs = append(errs, err)
+		}
 	}
 	for _, fam := range []string{"-4", "-6"} {
 		err := run("ip", fam, "rule", "del", "fwmark", mark, "lookup", "main",
@@ -580,15 +591,19 @@ func writeTunnelChains(b *strings.Builder, fam string, v6 bool, c Config) {
 	fmt.Fprintf(b, "\t\tmeta mark %#x ct mark set %#x\n", fwmark, fwmark)
 	b.WriteString("\t}\n")
 	// Tagged traffic keeps the system resolver, which would answer in
-	// the clear. Rewrite its DNS to the in-tunnel resolver — except
+	// the clear. Rewrite its DNS to a Mullvad resolver — except
 	// queries to a tagged resolver, and to loopback stubs
 	// (systemd-resolved): a loopback source cannot leave through the
 	// tunnel, so those resolve via the host instead.
-	if dns := firstV4(c.DNS); !v6 && dns.IsValid() {
+	dns, loop := firstV4(c.DNS), "127.0.0.0/8"
+	if v6 {
+		dns, loop = firstV6(c.DNS), "::1"
+	}
+	if dns.IsValid() {
 		b.WriteString("\tchain dnsout {\n")
 		b.WriteString("\t\ttype nat hook output priority -100;\n")
 		fmt.Fprintf(b, "\t\t%s daddr @%s accept\n", fam, setName)
-		fmt.Fprintf(b, "\t\t%s daddr 127.0.0.0/8 accept\n", fam)
+		fmt.Fprintf(b, "\t\t%s daddr %s accept\n", fam, loop)
 		fmt.Fprintf(b, "\t\tmeta mark %#x udp dport 53 dnat to %s\n", fwmark, dns)
 		fmt.Fprintf(b, "\t\tmeta mark %#x tcp dport 53 dnat to %s\n", fwmark, dns)
 		b.WriteString("\t}\n")
@@ -602,9 +617,7 @@ func writeTunnelChains(b *strings.Builder, fam string, v6 bool, c Config) {
 	// The suppress rule lets specific main-table routes win — how the
 	// LAN and docker nets stay direct, but also how an injected route
 	// could capture tunnel-bound traffic. Drop marked packets leaving
-	// anywhere else, and refuse tagged v6 DNS (no in-tunnel v6 resolver
-	// to rewrite to) before the link-local exception lets it out, so
-	// resolvers fall back to v4.
+	// anywhere else.
 	for _, chain := range [][2]string{{"guard", "output"}, {"guardfwd", "forward"}} {
 		fmt.Fprintf(b, "\tchain %s {\n", chain[0])
 		fmt.Fprintf(b, "\t\ttype filter hook %s priority 0;\n", chain[1])
@@ -614,8 +627,6 @@ func writeTunnelChains(b *strings.Builder, fam string, v6 bool, c Config) {
 		fmt.Fprintf(b, "\t\toifname %q accept\n", c.Iface)
 		fmt.Fprintf(b, "\t\t%s daddr @%s accept\n", fam, setName)
 		if v6 {
-			fmt.Fprintf(b, "\t\tmeta mark %#x udp dport 53 reject\n", fwmark)
-			fmt.Fprintf(b, "\t\tmeta mark %#x tcp dport 53 reject\n", fwmark)
 			b.WriteString("\t\tip6 daddr { fe80::/10, fc00::/7, ff02::/16 } accept\n")
 		} else {
 			b.WriteString("\t\tip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 224.0.0.0/4 } accept\n")
@@ -641,6 +652,15 @@ func writeDNSReturns(b *strings.Builder, fam string, v6 bool, dns []netip.Addr) 
 func firstV4(dns []netip.Addr) netip.Addr {
 	for _, a := range dns {
 		if a.Is4() {
+			return a
+		}
+	}
+	return netip.Addr{}
+}
+
+func firstV6(dns []netip.Addr) netip.Addr {
+	for _, a := range dns {
+		if a.Is6() {
 			return a
 		}
 	}
