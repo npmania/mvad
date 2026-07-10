@@ -134,9 +134,9 @@ Everything mvad touches, exhaustively:
   `ip/ip6 mvad-split`, `inet mvad-lockdown`), ip rules 97–99, and
   routing table 60 — all removed by `sudo mvad disconnect`
   (`lockdown off` for the lockdown table), even after a crash.
-- The sysctl `net.ipv4.conf.all.src_valid_mark` is set to 1 and, as
-  with wg-quick, left set until reboot: reverting it could break
-  another fwmark-routed tunnel.
+- The sysctl `net.ipv4.conf.all.src_valid_mark` is set to 1 while a
+  session runs and put back as found at disconnect, unless another
+  WireGuard interface still needs it.
 
 To purge mvad completely: `sudo mvad disconnect`, `sudo mvad lockdown
 off`, `mvad logout`, then delete `~/.config/mvad` and whatever you

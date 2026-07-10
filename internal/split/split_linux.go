@@ -21,6 +21,24 @@ type state struct {
 	Gateway  netip.Addr `json:"gateway"`
 	Gateway6 netip.Addr `json:"gateway6"`
 	Dev      string     `json:"dev"`
+	Iface    string     `json:"iface,omitempty"`
+	// The src_valid_mark value found before mvad first set it, carried
+	// across reconnects so teardown can put it back.
+	SrcValidMark string `json:"src_valid_mark,omitempty"`
+}
+
+const srcValidMarkPath = "/proc/sys/net/ipv4/conf/all/src_valid_mark"
+
+func readState() (state, bool) {
+	data, err := os.ReadFile(stateFile)
+	if err != nil {
+		return state{}, false
+	}
+	var s state
+	if json.Unmarshal(data, &s) != nil {
+		return state{}, false
+	}
+	return s, true
 }
 
 func up(c Config) error {
@@ -46,7 +64,14 @@ func up(c Config) error {
 	// must not strip what remains of the old one: its rules,
 	// unreachable defaults, and tables (nft -f is atomic) still hold
 	// the set fail-closed.
-	prevSplit := splitMode() && c.Split
+	old, hadState := readState()
+	prevSplit := hadState && old.Split && c.Split
+	prior := old.SrcValidMark
+	if prior == "" {
+		if data, err := os.ReadFile(srcValidMarkPath); err == nil {
+			prior = strings.TrimSpace(string(data))
+		}
+	}
 	rollback := func() {
 		if prevSplit {
 			return
@@ -55,8 +80,9 @@ func up(c Config) error {
 		_ = delRoute()
 		_ = nftDel()
 		_ = removeState()
+		restoreSrcValidMark(state{Iface: c.Iface, SrcValidMark: prior})
 	}
-	if err := saveState(state{Split: c.Split, Gateway: c.Gateway, Gateway6: c.Gateway6, Dev: c.Dev}); err != nil {
+	if err := saveState(state{Split: c.Split, Gateway: c.Gateway, Gateway6: c.Gateway6, Dev: c.Dev, Iface: c.Iface, SrcValidMark: prior}); err != nil {
 		return err
 	}
 	if err := runNft(buildScript(c)); err != nil {
@@ -69,9 +95,9 @@ func up(c Config) error {
 	}
 	// Reply packets get their mark restored from conntrack in
 	// prerouting, but rp_filter validates them against an unmarked
-	// lookup unless src_valid_mark is set. wg-quick does the same, and
-	// like wg-quick this is never reverted: another tunnel may need it.
-	if err := os.WriteFile("/proc/sys/net/ipv4/conf/all/src_valid_mark", []byte("1"), 0644); err != nil {
+	// lookup unless src_valid_mark is set; down puts back the recorded
+	// prior value.
+	if err := os.WriteFile(srcValidMarkPath, []byte("1"), 0644); err != nil {
 		rollback()
 		return fmt.Errorf("split: set src_valid_mark: %w", err)
 	}
@@ -82,11 +108,46 @@ func down() error {
 	if _, err := os.Stat(stateFile); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
+	// A corrupt state file still tears down; only the sysctl restore
+	// needs the recorded value.
+	s, _ := readState()
 	err := errors.Join(delRule(), delRoute(), nftDel(), removeState())
+	restoreSrcValidMark(s)
 	// Gone only when no member pids remain; occupied membership
 	// survives for the next connect.
 	_ = os.Remove(cgroupDir)
 	return err
+}
+
+// restoreSrcValidMark puts the sysctl back as recorded — unless
+// another wireguard interface is live: wg-quick asserts it once at up
+// and its tunnel goes deaf under strict rp_filter without it.
+func restoreSrcValidMark(s state) {
+	if s.SrcValidMark != "0" || otherWireguard(s.Iface) {
+		return
+	}
+	_ = os.WriteFile(srcValidMarkPath, []byte("0"), 0644)
+}
+
+func otherWireguard(self string) bool {
+	cmd := exec.Command("ip", "-j", "link", "show", "type", "wireguard")
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	out, err := cmd.Output()
+	if err != nil {
+		return true
+	}
+	var links []struct {
+		Ifname string `json:"ifname"`
+	}
+	if json.Unmarshal(out, &links) != nil {
+		return true
+	}
+	for _, l := range links {
+		if l.Ifname != self {
+			return true
+		}
+	}
+	return false
 }
 
 func addPID(pid int) error {
@@ -215,15 +276,8 @@ func available() bool {
 }
 
 func splitMode() bool {
-	data, err := os.ReadFile(stateFile)
-	if err != nil {
-		return false
-	}
-	var s state
-	if json.Unmarshal(data, &s) != nil {
-		return false
-	}
-	return s.Split
+	s, ok := readState()
+	return ok && s.Split
 }
 
 func cgroupExists() bool {

@@ -31,7 +31,7 @@ var (
 
 type Config struct {
 	Split    bool       // route only tagged traffic through Iface
-	Iface    string     // tunnel interface (split mode)
+	Iface    string     // tunnel interface
 	Gateway  netip.Addr // plain gateway (full-tunnel mode)
 	Gateway6 netip.Addr
 	Dev      string         // plain device (full-tunnel mode)
