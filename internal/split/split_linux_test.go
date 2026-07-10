@@ -168,3 +168,22 @@ func TestBuildScriptSplit(t *testing.T) {
 	}
 }
 
+func TestParseSetElems(t *testing.T) {
+	data := []byte(`{"nftables":[{"metainfo":{}},{"set":{"family":"ip","name":"net",
+		"elem":["10.5.0.7",{"prefix":{"addr":"172.18.0.0","len":16}},
+		{"elem":{"val":{"prefix":{"addr":"192.0.2.0","len":24}},"expires":10}}]}}]}`)
+	got := parseSetElems(data)
+	want := []netip.Prefix{
+		netip.MustParsePrefix("10.5.0.7/32"),
+		netip.MustParsePrefix("172.18.0.0/16"),
+		netip.MustParsePrefix("192.0.2.0/24"),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+}

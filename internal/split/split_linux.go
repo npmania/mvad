@@ -218,6 +218,67 @@ func setNets(ps []netip.Prefix) error {
 	return runNft(b.String())
 }
 
+// liveNets reads the current set elements, so a reconnect can keep
+// protecting them when container resolution fails.
+func liveNets() []netip.Prefix {
+	var out []netip.Prefix
+	for _, fam := range []string{"ip", "ip6"} {
+		cmd := exec.Command("nft", "-j", "list", "set", fam, tableName, setName)
+		cmd.Env = append(os.Environ(), "LC_ALL=C")
+		data, err := cmd.Output()
+		if err != nil {
+			continue
+		}
+		out = append(out, parseSetElems(data)...)
+	}
+	return out
+}
+
+func parseSetElems(data []byte) []netip.Prefix {
+	var doc struct {
+		Nftables []struct {
+			Set struct {
+				Elem []any `json:"elem"`
+			} `json:"set"`
+		} `json:"nftables"`
+	}
+	if json.Unmarshal(data, &doc) != nil {
+		return nil
+	}
+	var out []netip.Prefix
+	for _, n := range doc.Nftables {
+		for _, e := range n.Set.Elem {
+			if p, ok := elemPrefix(e); ok {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+
+func elemPrefix(e any) (netip.Prefix, bool) {
+	switch v := e.(type) {
+	case string:
+		if a, err := netip.ParseAddr(v); err == nil {
+			return netip.PrefixFrom(a, a.BitLen()), true
+		}
+	case map[string]any:
+		if inner, ok := v["elem"].(map[string]any); ok {
+			return elemPrefix(inner["val"])
+		}
+		if pr, ok := v["prefix"].(map[string]any); ok {
+			addr, _ := pr["addr"].(string)
+			bits, _ := pr["len"].(float64)
+			if a, err := netip.ParseAddr(addr); err == nil {
+				if p, err := a.Prefix(int(bits)); err == nil {
+					return p, true
+				}
+			}
+		}
+	}
+	return netip.Prefix{}, false
+}
+
 // coalesce drops prefixes covered by another so the seeded set never
 // declares conflicting intervals.
 func coalesce(ps []netip.Prefix) []netip.Prefix {

@@ -10,6 +10,7 @@ func addPID(int) error             { return ErrUnsupported }
 func rmPID(int) error              { return ErrUnsupported }
 func listPIDs() ([]int, error)     { return nil, ErrUnsupported }
 func setNets([]netip.Prefix) error { return ErrUnsupported }
+func liveNets() []netip.Prefix     { return nil }
 func clear() error                 { return ErrUnsupported }
 func available() bool              { return false }
 func splitMode() bool              { return false }

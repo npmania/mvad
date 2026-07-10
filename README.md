@@ -85,7 +85,9 @@ docker and compose entries are recorded by name and resolved to
 addresses at every connect; after containers restart with new
 addresses, run `sudo mvad split refresh` to reconcile the live set (a
 deploy hook or timer does fine — the connection itself is untouched).
-Until that refresh runs, the new addresses are not in the tunnel.
+Until that refresh runs, the new addresses are not in the tunnel. In split
+mode, a reconnect that can't resolve every entry keeps the whole
+previous set protected until a refresh sorts it out.
 
 Split-mode fine print: destinations with specific routes (the LAN,
 docker networks) stay direct, as do lookups through a loopback stub

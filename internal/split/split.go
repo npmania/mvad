@@ -46,6 +46,7 @@ func AddPID(pid int) error            { return addPID(pid) }
 func RmPID(pid int) error             { return rmPID(pid) }
 func ListPIDs() ([]int, error)        { return listPIDs() }
 func SetNets(ps []netip.Prefix) error { return setNets(ps) }
+func LiveNets() []netip.Prefix        { return liveNets() }
 func Clear() error                    { return clear() }
 func Available() bool                 { return available() }
 func SplitMode() bool                 { return splitMode() }

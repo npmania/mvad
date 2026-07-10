@@ -834,6 +834,13 @@ func doConnect(opts connectOpts) (retErr error) {
 	for _, e := range netErrs {
 		fmt.Fprintf(os.Stderr, "mvad: split: %v; run mvad split refresh once it's up\n", e)
 	}
+	if opts.split && len(netErrs) > 0 {
+		// Keep what the previous session protected rather than seeding
+		// without the entries that failed to resolve. Only in split
+		// mode: there stale addresses over-tunnel, in full mode they
+		// would bypass.
+		nets = append(nets, split.LiveNets()...)
+	}
 	if useSS {
 		if _, err := exec.LookPath("ss-local"); err != nil {
 			return errors.New("ss-local not found — install shadowsocks-libev")
