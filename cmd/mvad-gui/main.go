@@ -3277,9 +3277,13 @@ func splitOtherHeader(gtx layout.Context, th *material.Theme, st *state, pal pal
 
 func appShortcutsSection(gtx layout.Context, th *material.Theme, st *state, pal palette, apps []string) layout.Dimensions {
 	const cols = 3
+	launchTitle := "Launch outside tunnel"
+	if st.snap.Up && st.snap.Split {
+		launchTitle = "Launch in tunnel"
+	}
 	rows := []layout.FlexChild{
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return splitSectionHeader(gtx, th, pal, "Launch outside tunnel", nil, false)
+			return splitSectionHeader(gtx, th, pal, launchTitle, nil, false)
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
 	}
@@ -3725,9 +3729,13 @@ func boxedEditor(gtx layout.Context, th *material.Theme, ed *widget.Editor,
 }
 
 func splitRunBlock(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
+	runTitle := "Run outside tunnel"
+	if st.snap.Up && st.snap.Split {
+		runTitle = "Run in tunnel"
+	}
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return labeledEditor(gtx, th, &st.runCmdEd, pal, "Run outside tunnel")
+			return labeledEditor(gtx, th, &st.runCmdEd, pal, runTitle)
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {

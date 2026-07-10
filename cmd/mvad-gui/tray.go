@@ -50,6 +50,7 @@ type sni struct {
 	props   *prop.Properties
 	cmds    chan<- trayCmd
 	up      bool
+	split   bool
 	done    chan struct{}
 
 	mu       sync.Mutex
@@ -147,11 +148,13 @@ func (t *sni) loop(ctx context.Context, polls <-chan pollResult, windowState <-c
 			return
 		case r := <-polls:
 			up := r.err == nil && r.snap.Up
-			if up == t.up {
+			split := up && r.snap.Split
+			if up == t.up && split == t.split {
 				continue
 			}
 			t.up = up
-			t.refresh(up)
+			t.split = split
+			t.refresh(up, split)
 		case s := <-windowState:
 			t.mu.Lock()
 			if t.shown == s {
@@ -167,12 +170,15 @@ func (t *sni) loop(ctx context.Context, polls <-chan pollResult, windowState <-c
 	}
 }
 
-func (t *sni) refresh(up bool) {
+func (t *sni) refresh(up, split bool) {
 	pm := pmDown
 	body := "disconnected"
 	if up {
 		pm = pmUp
 		body = "connected"
+		if split {
+			body = "connected (split)"
+		}
 	}
 	pixmaps := []pixmapEntry{{Width: 22, Height: 22, Pixels: pm}}
 	t.props.SetMust(sniIface, "IconPixmap", pixmaps)
