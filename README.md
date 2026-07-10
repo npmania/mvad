@@ -106,9 +106,10 @@ probe and redials only a dead tunnel — a deliberate disconnect stays
 down — re-picking within the original query's scope while avoiding
 both hops it is leaving: connect with `jp-osa` and a dead relay is
 replaced by another Osaka relay. examples/mvad-check.timer runs it
-every minute. An exact-hostname session has nowhere to fail over to
-and just redials; the kernel retries handshakes on its own, so that
-mostly matters for the transport shims.
+every minute. An exact-hostname session has nowhere to fail over to;
+--if-dead leaves it alone and lets the kernel retry the handshake,
+unless the relay or its key changed or a transport shim needs
+restarting.
 
 ### Status
 

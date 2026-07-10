@@ -711,6 +711,7 @@ type connectOpts struct {
 	via       string
 	avoid     string // exit relay being failed away from
 	avoidVia  string // entry relay being failed away from
+	retry     bool   // unattended redial of a dead tunnel
 	allowLAN  bool
 	split     bool
 	transport string
@@ -787,9 +788,10 @@ func connect(args []string) error {
 }
 
 func doConnect(opts connectOpts) (retErr error) {
+	quiet := false
 	defer func() {
 		var uerr *usageError
-		if errors.As(retErr, &uerr) {
+		if quiet || errors.As(retErr, &uerr) {
 			return
 		}
 		if retErr == nil {
@@ -885,6 +887,17 @@ func doConnect(opts connectOpts) (retErr error) {
 		}
 		ssEnd = ss
 		endpoint = netip.AddrPortFrom(ssBridge.IPv4, ss.Port)
+	}
+	// An unattended redial that would rebuild the identical session
+	// adds nothing: the kernel already retries handshakes on its own.
+	// Transport shims are processes, so those sessions still rebuild.
+	if opts.retry && opts.transport == "wireguard" &&
+		exit.Hostname == cfg.LastRelay && entryHost == cfg.LastEntryRelay &&
+		endpoint == cfg.LastEndpoint {
+		if snap, _ := status.Read(ifname); snap.Up && snap.PeerKey == exit.PublicKey {
+			quiet = true
+			return nil
+		}
 	}
 	wgEndpoint := endpoint
 	if useTCP {
@@ -1112,6 +1125,7 @@ func reconnect(args []string) error {
 		via:       via,
 		avoid:     cfg.LastRelay,
 		avoidVia:  cfg.LastEntryRelay,
+		retry:     *ifDead,
 		allowLAN:  *allowLAN || cfg.LastAllowLAN,
 		split:     cfg.LastSplit,
 		transport: "wireguard",
