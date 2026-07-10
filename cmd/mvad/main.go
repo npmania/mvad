@@ -810,6 +810,19 @@ func doConnect(opts connectOpts) (retErr error) {
 	if err := checkLoggedIn(cfg); err != nil {
 		return err
 	}
+	// A failed connect must not flip the mode a later reconnect
+	// replays; the other Last* fields keep attempt semantics.
+	prevSplit := cfg.LastSplit
+	saved := false
+	defer func() {
+		if retErr == nil || !saved || cfg.LastSplit == prevSplit {
+			return
+		}
+		cfg.LastSplit = prevSplit
+		if err := cfg.Save(); err != nil {
+			fmt.Fprintf(os.Stderr, "mvad: restore mode: %v\n", err)
+		}
+	}()
 	// Resolve before any teardown: docker must not stall the window
 	// where the old session's protection is already gone.
 	nets, netErrs := resolveSplitNets(cfg)
@@ -902,6 +915,7 @@ func doConnect(opts connectOpts) (retErr error) {
 	if err := cfg.Save(); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
+	saved = true
 	wcfg := wg.Config{
 		Name:       ifname,
 		PrivateKey: priv,
