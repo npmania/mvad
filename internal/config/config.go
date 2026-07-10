@@ -45,6 +45,7 @@ type Config struct {
 	SplitNets         []string        `json:"split_nets,omitempty"`
 	SplitDocker       []string        `json:"split_docker,omitempty"`
 	SplitCompose      []string        `json:"split_compose,omitempty"`
+	SplitK8s          []string        `json:"split_k8s,omitempty"`
 }
 
 func path() (string, error) {

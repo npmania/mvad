@@ -15,9 +15,9 @@ import (
 )
 
 // resolveSplitNets builds the split set's source addresses: the raw
-// prefixes plus fresh resolutions of the recorded docker and compose
-// entries. Container addresses change across restarts, so entries are
-// names resolved at use, never stored addresses.
+// prefixes plus fresh resolutions of the recorded docker, compose,
+// and k8s entries. Container addresses change across restarts, so
+// entries are names resolved at use, never stored addresses.
 func resolveSplitNets(cfg *config.Config) ([]netip.Prefix, []error) {
 	nets := parseNets(cfg.SplitNets)
 	var errs []error
@@ -37,6 +37,14 @@ func resolveSplitNets(cfg *config.Config) ([]netip.Prefix, []error) {
 		ps, err := composeNets(project, service)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("compose:%s: %w", entry, err))
+			continue
+		}
+		nets = append(nets, ps...)
+	}
+	for _, entry := range cfg.SplitK8s {
+		ps, err := k8sNets(entry)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("k8s:%s: %w", entry, err))
 			continue
 		}
 		nets = append(nets, ps...)

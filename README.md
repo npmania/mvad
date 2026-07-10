@@ -70,9 +70,9 @@ relays --refresh` to pick up new relay addresses.
 ### Split tunneling
 
 The split set — pids in the mvad-split cgroup plus forwarded source
-addresses (containers, VMs) added with `mvad split
-add-ip/add-docker/add-compose` — is the traffic separated from the
-rest. A plain `connect` tunnels everything and the split set bypasses
+addresses (containers, VMs, pods) added with `mvad split
+add-ip/add-docker/add-compose/add-k8s` — is the traffic separated from
+the rest. A plain `connect` tunnels everything and the split set bypasses
 the tunnel. `connect --split` inverts that: the system stays on the
 plain network and only the split set is tunneled, with its port-53 DNS
 rewritten to Mullvad resolvers and a fail-closed route if the tunnel
@@ -83,14 +83,26 @@ drops.
 	sudo mvad split add-docker grafana
 	sudo mvad split add-compose myapp         # whole project
 	sudo mvad split add-compose myapp worker  # one service
+	sudo mvad split add-k8s scrapers          # whole namespace
+	sudo mvad split add-k8s scrapers app=web  # label selector
+	sudo mvad split add-k8s default debug-0   # one pod
 
-docker and compose entries are recorded by name and resolved to
+docker, compose, and k8s entries are recorded by name and resolved to
 addresses at every connect; after containers restart with new
 addresses, run `sudo mvad split refresh` to reconcile the live set (a
 deploy hook or timer does fine — the connection itself is untouched).
 Until that refresh runs, the new addresses are not in the tunnel. In split
 mode, a reconnect that can't resolve every entry keeps the whole
 previous set protected until a refresh sorts it out.
+
+k8s entries resolve through kubectl, with the invoking user's
+kubeconfig under sudo, and name a namespace, one pod, or a label
+selector — a bare word is a pod name; a selector carries an operator.
+Only pods on this node are used: the set matches forwarded source
+addresses, which pod traffic carries where the host itself is the
+node (k3s, kubeadm) — under kind or minikube's docker driver it hides
+behind the node container's address. Host-network pods share the
+host's address and are skipped.
 
 Split-mode fine print: destinations with specific routes (the LAN,
 docker networks) stay direct, as do lookups through a loopback stub

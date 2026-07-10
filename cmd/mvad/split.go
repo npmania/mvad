@@ -3,10 +3,8 @@
 package main
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"net"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -92,21 +90,6 @@ func runCmd(args []string) error {
 	return syscall.Exec(bin, args, env)
 }
 
-func readInvokerEnv() []string {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", os.Getppid()))
-	if err != nil {
-		return nil
-	}
-	var env []string
-	for p := range bytes.SplitSeq(data, []byte{0}) {
-		if len(p) == 0 {
-			continue
-		}
-		env = append(env, string(p))
-	}
-	return env
-}
-
 // dropPrivs drops to the user who invoked mvad via sudo or pkexec.
 // A no-op when mvad was launched directly as root.
 func dropPrivs() error {
@@ -173,6 +156,10 @@ func splitCmd(args []string) error {
 		return splitAddCompose(rest)
 	case "rm-compose":
 		return splitRmCompose(rest)
+	case "add-k8s":
+		return splitAddK8s(rest)
+	case "rm-k8s":
+		return splitRmK8s(rest)
 	case "refresh":
 		return splitRefresh(rest)
 	case "list":
@@ -248,6 +235,9 @@ func splitList(args []string) error {
 	for _, s := range cfg.SplitCompose {
 		fmt.Println("compose:" + s)
 	}
+	for _, s := range cfg.SplitK8s {
+		fmt.Println("k8s:" + s)
+	}
 	return nil
 }
 
@@ -273,10 +263,11 @@ func splitClear(args []string) error {
 		return errors.Join(clearErr, err)
 	}
 	var saveErr error
-	if cfg.SplitNets != nil || cfg.SplitDocker != nil || cfg.SplitCompose != nil {
+	if cfg.SplitNets != nil || cfg.SplitDocker != nil || cfg.SplitCompose != nil || cfg.SplitK8s != nil {
 		cfg.SplitNets = nil
 		cfg.SplitDocker = nil
 		cfg.SplitCompose = nil
+		cfg.SplitK8s = nil
 		saveErr = cfg.Save()
 	}
 	return errors.Join(clearErr, saveErr)
@@ -303,23 +294,6 @@ func splitAddIP(args []string) error {
 		return usagef("%s is a local address; select local processes with mvad run or split add-pid", p.Addr())
 	}
 	return splitAddEntry(splitNetsOf, p.String())
-}
-
-func isLocalAddr(a netip.Addr) bool {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return false
-	}
-	for _, ia := range addrs {
-		ipn, ok := ia.(*net.IPNet)
-		if !ok {
-			continue
-		}
-		if ip, ok := netip.AddrFromSlice(ipn.IP); ok && ip.Unmap() == a {
-			return true
-		}
-	}
-	return false
 }
 
 func splitRmIP(args []string) error {
@@ -387,7 +361,7 @@ func splitAddCompose(args []string) error {
 	if len(args) != 1 && len(args) != 2 {
 		return usagef(usageSplitAddCompose)
 	}
-	entry := composeEntry(args)
+	entry := joinEntry(args)
 	project, service, _ := strings.Cut(entry, "/")
 	ps, err := composeNets(project, service)
 	if err != nil {
@@ -409,7 +383,7 @@ func splitRmCompose(args []string) error {
 		return usagef(usageSplitRmCompose)
 	}
 	// A bare project also removes its per-service entries.
-	entry := composeEntry(args)
+	entry := joinEntry(args)
 	return splitRmMatch(splitComposeOf, entry, func(s string) bool {
 		return s == entry || strings.HasPrefix(s, entry+"/")
 	})
@@ -441,11 +415,54 @@ func splitRefresh(args []string) error {
 	return syncNets(cfg)
 }
 
-func composeEntry(args []string) string {
+func joinEntry(args []string) string {
 	if len(args) == 2 {
 		return args[0] + "/" + args[1]
 	}
 	return args[0]
+}
+
+func splitAddK8s(args []string) error {
+	if wantHelp(args) {
+		fmt.Println(usageSplitAddK8s)
+		return nil
+	}
+	if os.Geteuid() != 0 {
+		return errors.New("this command needs root; rerun with sudo")
+	}
+	if len(args) != 1 && len(args) != 2 {
+		return usagef(usageSplitAddK8s)
+	}
+	entry := joinEntry(args)
+	ps, err := k8sNets(entry)
+	if err != nil {
+		return err
+	}
+	printNets(ps)
+	return splitAddEntry(splitK8sOf, entry)
+}
+
+func splitRmK8s(args []string) error {
+	if wantHelp(args) {
+		fmt.Println(usageSplitRmK8s)
+		return nil
+	}
+	if os.Geteuid() != 0 {
+		return errors.New("this command needs root; rerun with sudo")
+	}
+	if len(args) != 1 && len(args) != 2 {
+		return usagef(usageSplitRmK8s)
+	}
+	entry := joinEntry(args)
+	// Exact only: selectors can contain "/", so the namespace prefix
+	// rule below would swallow entries the user didn't name.
+	if len(args) == 2 {
+		return splitRmEntry(splitK8sOf, entry)
+	}
+	// A bare namespace also removes its per-pod entries.
+	return splitRmMatch(splitK8sOf, entry, func(s string) bool {
+		return s == entry || strings.HasPrefix(s, entry+"/")
+	})
 }
 
 func parseNet(s string) (netip.Prefix, error) {
@@ -467,6 +484,7 @@ func parseNet(s string) (netip.Prefix, error) {
 func splitNetsOf(c *config.Config) *[]string    { return &c.SplitNets }
 func splitDockerOf(c *config.Config) *[]string  { return &c.SplitDocker }
 func splitComposeOf(c *config.Config) *[]string { return &c.SplitCompose }
+func splitK8sOf(c *config.Config) *[]string     { return &c.SplitK8s }
 
 // splitAddEntry records the entry in config, so connect reseeds it,
 // and reconciles the live set when one is installed.

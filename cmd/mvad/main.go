@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -99,7 +100,7 @@ const (
 	usageLockdownOff     = "usage: mvad lockdown off"
 	usageLockdownRefresh = "usage: mvad lockdown refresh"
 	usageRun             = "usage: mvad run [--] <command> [args...]"
-	usageSplit           = "usage: mvad split <add-pid|rm-pid|add-ip|rm-ip|add-docker|rm-docker|add-compose|rm-compose|refresh|list|clear>"
+	usageSplit           = "usage: mvad split <add-pid|rm-pid|add-ip|rm-ip|add-docker|rm-docker|add-compose|rm-compose|add-k8s|rm-k8s|refresh|list|clear>"
 	usageSplitAddPID     = "usage: mvad split add-pid <pid>"
 	usageSplitRmPID      = "usage: mvad split rm-pid <pid>"
 	usageSplitAddIP      = "usage: mvad split add-ip <addr|cidr>"
@@ -108,6 +109,8 @@ const (
 	usageSplitRmDocker   = "usage: mvad split rm-docker <container>"
 	usageSplitAddCompose = "usage: mvad split add-compose <project> [<service>]"
 	usageSplitRmCompose  = "usage: mvad split rm-compose <project> [<service>]"
+	usageSplitAddK8s     = "usage: mvad split add-k8s <namespace> [<pod>|<selector>]"
+	usageSplitRmK8s      = "usage: mvad split rm-k8s <namespace> [<pod>|<selector>]"
 	usageSplitRefresh    = "usage: mvad split refresh"
 	usageSplitList       = "usage: mvad split list"
 	usageSplitClear      = "usage: mvad split clear"
@@ -1054,6 +1057,38 @@ func parseNets(ss []string) []netip.Prefix {
 		ps = append(ps, p)
 	}
 	return ps
+}
+
+func isLocalAddr(a netip.Addr) bool {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, ia := range addrs {
+		ipn, ok := ia.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if ip, ok := netip.AddrFromSlice(ipn.IP); ok && ip.Unmap() == a {
+			return true
+		}
+	}
+	return false
+}
+
+func readInvokerEnv() []string {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", os.Getppid()))
+	if err != nil {
+		return nil
+	}
+	var env []string
+	for p := range bytes.SplitSeq(data, []byte{0}) {
+		if len(p) == 0 {
+			continue
+		}
+		env = append(env, string(p))
+	}
+	return env
 }
 
 func reconnect(args []string) error {
