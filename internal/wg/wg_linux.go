@@ -58,6 +58,10 @@ func up(cfg Config) error {
 		allowed[i] = prefixToIPNet(p)
 	}
 	priv := cfg.PrivateKey
+	// No FirewallMark: the device stays unmarked, so the encrypted
+	// outer transport carries mark 0 and rides the main table to the
+	// relay. The split fwmark and its rp_filter/guard machinery govern
+	// only inner tagged traffic and its replies, never the outer UDP.
 	wcfg := wgtypes.Config{
 		PrivateKey:   &priv,
 		ReplacePeers: true,
