@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -66,7 +67,7 @@ func runCmd(args []string) error {
 		return usagef(usageRun)
 	}
 	if !split.Available() {
-		return fmt.Errorf("split-tunnel cgroup %s missing; run mvad connect first", split.CgroupDir)
+		return fmt.Errorf("split-tunnel cgroup %s missing; run mvad connect (or connect --split) first", split.CgroupDir)
 	}
 	bin, err := exec.LookPath(args[0])
 	if err != nil {
@@ -296,7 +297,29 @@ func splitAddIP(args []string) error {
 	if err != nil {
 		return err
 	}
+	// The source-address set only sees forwarded traffic; a host
+	// address here would silently do nothing.
+	if p.IsSingleIP() && isLocalAddr(p.Addr()) {
+		return usagef("%s is a local address; select local processes with mvad run or split add-pid", p.Addr())
+	}
 	return splitAddEntry(splitNetsOf, p.String())
+}
+
+func isLocalAddr(a netip.Addr) bool {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, ia := range addrs {
+		ipn, ok := ia.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if ip, ok := netip.AddrFromSlice(ipn.IP); ok && ip.Unmap() == a {
+			return true
+		}
+	}
+	return false
 }
 
 func splitRmIP(args []string) error {
@@ -436,6 +459,8 @@ func parseNet(s string) (netip.Prefix, error) {
 	if err != nil {
 		return netip.Prefix{}, usagef("invalid address %q", s)
 	}
+	// Unmap 4-in-6 input, or it lands in the v6 set and matches nothing.
+	a = a.Unmap()
 	return netip.PrefixFrom(a, a.BitLen()), nil
 }
 
