@@ -37,6 +37,7 @@ type Config struct {
 	Dev      string         // plain device (full-tunnel mode)
 	DNS      []netip.Addr   // in-tunnel resolvers
 	HasV6    bool           // tunnel carries IPv6
+	AllowLAN bool           // exempt LAN resolvers from the DNS rewrite
 	Nets     []netip.Prefix // source addresses to tag
 }
 

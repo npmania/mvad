@@ -52,8 +52,21 @@ func TestBuildScript(t *testing.T) {
 	if strings.Contains(v6Table, "ip daddr ") || strings.Contains(v6Table, "172.18.0.0/16") {
 		t.Errorf("v4 address leaked into ip6-family script\n--- got ---\n%s", got)
 	}
-	if strings.Contains(got, "dnat") {
-		t.Errorf("dnat rule in full-tunnel script\n--- got ---\n%s", got)
+	dnsWants := []string{
+		"meta mark 0xca6c accept",
+		"ip daddr 127.0.0.0/8 accept",
+		"ip6 daddr ::1 accept",
+		"udp dport 53 dnat to 10.64.0.1",
+		"tcp dport 53 dnat to 10.64.0.1",
+		"udp dport 53 dnat to fc00:bbbb::1",
+	}
+	for _, w := range dnsWants {
+		if !strings.Contains(got, w) {
+			t.Errorf("script missing %q\n--- got ---\n%s", w, got)
+		}
+	}
+	if strings.Contains(got, "10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } accept") {
+		t.Errorf("LAN resolver exemption without allow-lan\n--- got ---\n%s", got)
 	}
 	if strings.Contains(got, "ct direction reply return") {
 		t.Errorf("reply exemption in full-tunnel script; replies from tagged sources need the mark\n--- got ---\n%s", got)
@@ -65,6 +78,18 @@ func TestBuildScript(t *testing.T) {
 		if !strings.Contains(got, w) {
 			t.Errorf("script missing %q\n--- got ---\n%s", w, got)
 		}
+	}
+}
+
+func TestBuildScriptAllowLAN(t *testing.T) {
+	got := buildScript(Config{
+		Gateway:  netip.MustParseAddr("192.168.1.1"),
+		Dev:      "enp0s3",
+		DNS:      []netip.Addr{netip.MustParseAddr("10.64.0.1")},
+		AllowLAN: true,
+	})
+	if !strings.Contains(got, "ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } accept") {
+		t.Errorf("LAN resolver exemption missing with allow-lan\n--- got ---\n%s", got)
 	}
 }
 

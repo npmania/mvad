@@ -43,8 +43,11 @@ The relay argument is an exact hostname (`jp-osa-wg-001`) or a prefix
 
 `connect` replaces the default route with the tunnel, points DNS at
 the in-tunnel resolver, and installs an nftables kill-switch that
-drops anything not headed for the relay. `--allow-lan` opens the
-private ranges. `reconnect` re-picks from the last query, avoiding the
+drops anything not headed for the relay. Port-53 queries are also
+rewritten to Mullvad resolvers at the packet level, so another daemon
+fighting over resolv.conf (tailscaled, say) cannot break resolution.
+`--allow-lan` opens the private ranges and lets queries to LAN
+resolvers through unrewritten. `reconnect` re-picks from the last query, avoiding the
 relay it is leaving; `up` stays in the foreground and reconnects when
 the default route changes (suspend, Wi-Fi roam) — see
 examples/mvad-up@.service.

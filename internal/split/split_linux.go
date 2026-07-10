@@ -627,6 +627,38 @@ func writePlainChains(b *strings.Builder, fam string, v6 bool, c Config) {
 	fmt.Fprintf(b, "\t\t%s saddr @%s meta mark set %#x\n", fam, setName, fwmark)
 	fmt.Fprintf(b, "\t\tmeta mark %#x ct mark set %#x\n", fwmark, fwmark)
 	b.WriteString("\t}\n")
+	// Another daemon rewriting resolv.conf (tailscaled) must not kill
+	// resolution: queries not aimed at loopback, a tagged resolver, or
+	// (with allow-lan) the LAN are rewritten to a Mullvad resolver.
+	// Tagged traffic keeps the resolver it chose, on the plain path.
+	dns, loop := firstV4(c.DNS), "127.0.0.0/8"
+	if v6 {
+		dns, loop = firstV6(c.DNS), "::1"
+	}
+	if dns.IsValid() {
+		for _, chain := range [][2]string{
+			{"dnsout", "type nat hook output priority -100;"},
+			{"dnspre", "type nat hook prerouting priority dstnat;"},
+		} {
+			fmt.Fprintf(b, "\tchain %s {\n", chain[0])
+			fmt.Fprintf(b, "\t\t%s\n", chain[1])
+			fmt.Fprintf(b, "\t\t%s daddr @%s accept\n", fam, setName)
+			if chain[0] == "dnsout" {
+				fmt.Fprintf(b, "\t\t%s daddr %s accept\n", fam, loop)
+			}
+			fmt.Fprintf(b, "\t\tmeta mark %#x accept\n", fwmark)
+			if c.AllowLAN {
+				if v6 {
+					b.WriteString("\t\tip6 daddr { fe80::/10, fc00::/7 } accept\n")
+				} else {
+					b.WriteString("\t\tip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } accept\n")
+				}
+			}
+			fmt.Fprintf(b, "\t\tudp dport 53 dnat to %s\n", dns)
+			fmt.Fprintf(b, "\t\ttcp dport 53 dnat to %s\n", dns)
+			b.WriteString("\t}\n")
+		}
+	}
 	// Marked packets keep the wg interface's source IP after re-routing,
 	// so replies can't return. Masquerade to the physical interface.
 	b.WriteString("\tchain postrouting {\n")
