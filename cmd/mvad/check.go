@@ -40,14 +40,34 @@ func checkCmd(args []string) error {
 	if !s.Up {
 		return &exitErr{code: 3, err: errors.New("not connected")}
 	}
-	if err := probeTunnel(); err != nil {
-		return &exitErr{code: 1, err: fmt.Errorf("tunnel probe failed: %v", err)}
+	if tunnelDead(s) {
+		return &exitErr{code: 1, err: errors.New("tunnel probe failed")}
 	}
 	return nil
 }
 
-// probeTunnel sends a DNS query to the in-tunnel resolver, on a
-// marked socket in split mode so it rides the split routing.
+// tunnelDead reports whether a tunnel that is Up carries no traffic. A
+// fresh WireGuard handshake means the relay answered within the last
+// rekey interval, so the data plane is live even if the in-tunnel
+// resolver is momentarily unreachable; only when there is no such
+// corroboration does a failed probe condemn the tunnel. This keeps a
+// resolver hiccup from tearing down a working session.
+func tunnelDead(s status.Snapshot) bool {
+	if !s.LastHandshake.IsZero() && time.Since(s.LastHandshake) < handshakeFresh {
+		return false
+	}
+	return probeTunnel() != nil
+}
+
+// handshakeFresh bounds how recent a handshake still counts as the
+// relay being alive; WireGuard rekeys about every two minutes.
+const handshakeFresh = 150 * time.Second
+
+// probeTunnel sends a DNS query to the in-tunnel resolvers, on a marked
+// socket in split mode so it rides the split routing. It tries each
+// resolver with a growing timeout so one dropped query or a slow first
+// recursion does not read as a dead tunnel; only when every attempt
+// fails does it report an error.
 func probeTunnel() error {
 	mark := split.SplitMode()
 	d := net.Dialer{
@@ -62,14 +82,23 @@ func probeTunnel() error {
 			return errors.Join(err, serr)
 		},
 	}
-	r := net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-			return d.DialContext(ctx, network, net.JoinHostPort(mullvadDNS[0].String(), "53"))
-		},
+	var last error
+	for _, timeout := range []time.Duration{3 * time.Second, 5 * time.Second} {
+		for _, res := range splitDNS {
+			r := net.Resolver{
+				PreferGo: true,
+				Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+					return d.DialContext(ctx, network, net.JoinHostPort(res.String(), "53"))
+				},
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			_, err := r.LookupHost(ctx, "mullvad.net")
+			cancel()
+			if err == nil {
+				return nil
+			}
+			last = err
+		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_, err := r.LookupHost(ctx, "mullvad.net")
-	return err
+	return last
 }

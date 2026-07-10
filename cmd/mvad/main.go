@@ -1091,12 +1091,14 @@ func reconnect(args []string) error {
 	if *ifDead {
 		// Probing under the lock keeps a failover timer from tearing
 		// down a session someone just rebuilt, and a deliberate
-		// disconnect stays down.
+		// disconnect stays down. Escape the split cgroup first so the
+		// probe socket routes like check does, not as tagged traffic.
+		escapeSplitCgroup()
 		s, err := status.Read(ifname)
 		if err != nil && !errors.Is(err, status.ErrNotConnected) {
 			return err
 		}
-		if !s.Up || probeTunnel() == nil {
+		if !s.Up || !tunnelDead(s) {
 			return nil
 		}
 	}
