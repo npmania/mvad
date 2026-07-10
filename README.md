@@ -99,14 +99,14 @@ Relays die, and a dead relay makes no noise — the interface stays up
 while traffic goes nowhere. `sudo mvad check` sends a DNS query to the
 in-tunnel resolver through the tunnel (through the split routing in
 split mode): exit 0 when it answers, 1 when the tunnel is dead, 3 when
-there is no tunnel. examples/mvad-check.timer runs check every minute
-and reconnects only on a dead tunnel, so a deliberate disconnect stays
-down. reconnect re-picks within the original query's scope avoiding
+there is no tunnel. `sudo mvad reconnect --if-dead` runs the same
+probe and redials only a dead tunnel — a deliberate disconnect stays
+down — re-picking within the original query's scope while avoiding
 both hops it is leaving: connect with `jp-osa` and a dead relay is
-replaced by another Osaka relay. An exact-hostname session has nowhere
-to fail over to and just redials. The probe holds no lock, so in rare
-timing a failover can replace a relay you picked manually seconds
-earlier; the next tick settles it.
+replaced by another Osaka relay. examples/mvad-check.timer runs it
+every minute. An exact-hostname session has nowhere to fail over to
+and just redials; the kernel retries handshakes on its own, so that
+mostly matters for the transport shims.
 
 ### Status
 

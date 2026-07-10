@@ -84,7 +84,7 @@ const (
 	usageRotateKey       = "usage: mvad rotate-key"
 	usageRelays          = "usage: mvad relays [--bridges] [--refresh] [--json] [--country C]... [--city C]... [--provider P]... [--owned true|false] [--protocol wireguard]"
 	usageConnect         = "usage: mvad connect [--split] [--allow-lan] [--via <entry>] [--transport wireguard|tcp|shadowsocks [--port 80|443|5001] [--bridge <host>]] <relay>"
-	usageReconnect       = "usage: mvad reconnect [--allow-lan]"
+	usageReconnect       = "usage: mvad reconnect [--if-dead] [--allow-lan]"
 	usageUp              = "usage: mvad up [--allow-lan] [--via <entry>] [--transport wireguard|tcp|shadowsocks [--port 80|443|5001] [--bridge <host>]] <relay>"
 	usageDisconnect      = "usage: mvad disconnect"
 	usageStatus          = "usage: mvad status [--format json|waybar] [--refresh]"
@@ -1026,14 +1026,10 @@ func reconnect(args []string) error {
 	if os.Geteuid() != 0 {
 		return errors.New("this command needs root; rerun with sudo")
 	}
-	release, err := lock.AcquireRoot()
-	if err != nil {
-		return err
-	}
-	defer release()
 	fs := flag.NewFlagSet("reconnect", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	allowLAN := fs.Bool("allow-lan", false, "allow traffic to private LAN ranges")
+	ifDead := fs.Bool("if-dead", false, "reconnect only when a tunnel exists but carries no traffic")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Println(usageReconnect)
@@ -1043,6 +1039,28 @@ func reconnect(args []string) error {
 	}
 	if fs.NArg() != 0 {
 		return usagef(usageReconnect)
+	}
+	release, err := lock.AcquireRoot()
+	if err != nil {
+		// A held lock means another invocation is managing the tunnel;
+		// exactly what an unattended --if-dead should leave alone.
+		if *ifDead && errors.Is(err, lock.ErrLocked) {
+			return nil
+		}
+		return err
+	}
+	defer release()
+	if *ifDead {
+		// Probing under the lock keeps a failover timer from tearing
+		// down a session someone just rebuilt, and a deliberate
+		// disconnect stays down.
+		s, err := status.Read(ifname)
+		if err != nil && !errors.Is(err, status.ErrNotConnected) {
+			return err
+		}
+		if !s.Up || probeTunnel() == nil {
+			return nil
+		}
 	}
 	cfg, err := config.Load()
 	if err != nil {

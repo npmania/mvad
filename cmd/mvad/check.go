@@ -17,11 +17,10 @@ import (
 	"github.com/npmania/mvad/internal/status"
 )
 
-// checkCmd probes the tunnel end to end: a DNS query to the in-tunnel
-// resolver, on a marked socket in split mode so it rides the split
-// routing. Exit 1 means the tunnel carries no traffic; exit 3 means
-// there is no tunnel — deliberate disconnects must not read as dead
-// relays, or a failover timer would redial them.
+// checkCmd probes the tunnel end to end. Exit 1 means the tunnel
+// carries no traffic; exit 3 means there is no tunnel — deliberate
+// disconnects must not read as dead relays, or a failover timer would
+// redial them.
 func checkCmd(args []string) error {
 	if wantHelp(args) {
 		fmt.Println(usageCheck)
@@ -41,6 +40,15 @@ func checkCmd(args []string) error {
 	if !s.Up {
 		return &exitErr{code: 3, err: errors.New("not connected")}
 	}
+	if err := probeTunnel(); err != nil {
+		return &exitErr{code: 1, err: fmt.Errorf("tunnel probe failed: %v", err)}
+	}
+	return nil
+}
+
+// probeTunnel sends a DNS query to the in-tunnel resolver, on a
+// marked socket in split mode so it rides the split routing.
+func probeTunnel() error {
 	mark := split.SplitMode()
 	d := net.Dialer{
 		Control: func(network, address string, c syscall.RawConn) error {
@@ -62,8 +70,6 @@ func checkCmd(args []string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err := r.LookupHost(ctx, "mullvad.net"); err != nil {
-		return &exitErr{code: 1, err: fmt.Errorf("tunnel probe failed: %v", err)}
-	}
-	return nil
+	_, err := r.LookupHost(ctx, "mullvad.net")
+	return err
 }
