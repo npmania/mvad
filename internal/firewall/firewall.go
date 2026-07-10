@@ -1,5 +1,5 @@
 // Package firewall installs an nft table that blocks all traffic
-// except WireGuard, the tunnel, and Mullvad DNS, with optional LAN.
+// except WireGuard and the tunnel, with optional LAN.
 package firewall
 
 import (
@@ -12,7 +12,6 @@ var ErrUnsupported = errors.New("firewall: unsupported platform")
 type Config struct {
 	Iface    string
 	Endpoint netip.AddrPort
-	DNS      []netip.Addr
 	AllowLAN bool
 	TCP      bool
 }

@@ -12,7 +12,6 @@ func lanConfig() Config {
 	return Config{
 		Iface:    "mvad-wg0",
 		Endpoint: netip.MustParseAddrPort("185.65.135.100:51820"),
-		DNS:      []netip.Addr{netip.MustParseAddr("10.64.0.1")},
 		AllowLAN: true,
 	}
 }

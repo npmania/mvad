@@ -86,14 +86,6 @@ func buildScript(c Config) string {
 	b.WriteString("\t\toifname \"lo\" accept\n")
 	fmt.Fprintf(&b, "\t\toifname %q accept\n", c.Iface)
 	fmt.Fprintf(&b, "\t\t%s dport %d %s daddr %s accept\n", proto, port, relayFam, relay)
-	for _, d := range c.DNS {
-		fam := "ip"
-		if d.Is6() {
-			fam = "ip6"
-		}
-		fmt.Fprintf(&b, "\t\tudp dport 53 %s daddr %s accept\n", fam, d)
-		fmt.Fprintf(&b, "\t\ttcp dport 53 %s daddr %s accept\n", fam, d)
-	}
 	if c.AllowLAN {
 		writeLANRules(&b, "daddr")
 	}
