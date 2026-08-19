@@ -1350,9 +1350,9 @@ func showStatus(args []string) error {
 			return &exitErr{code: 2, err: err}
 		}
 	}
-	s, err := status.Read(ifname)
-	if err != nil && !errors.Is(err, status.ErrNotConnected) {
-		return &exitErr{code: 2, err: err}
+	s, readErr := status.Read(ifname)
+	if readErr != nil && !errors.Is(readErr, status.ErrNotConnected) {
+		return &exitErr{code: 2, err: readErr}
 	}
 	s.Relay = cfg.LastRelay
 	s.Entry = cfg.LastEntryRelay
