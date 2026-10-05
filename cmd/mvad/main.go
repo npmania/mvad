@@ -655,20 +655,8 @@ func listRelays(args []string) error {
 	if err != nil {
 		return err
 	}
-	if *refresh || len(cfg.RelayCache) == 0 || time.Since(cfg.RelaysFetchedAt) > 24*time.Hour {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-		relays, err := mullvad.New().Relays(ctx)
-		if err != nil {
-			return err
-		}
-		data, err := json.Marshal(relays)
-		if err != nil {
-			return err
-		}
-		cfg.RelayCache = data
-		cfg.RelaysFetchedAt = time.Now()
-		if err := cfg.Save(); err != nil {
+	if *refresh || relaysStale(cfg) {
+		if err := refreshRelays(cfg, 60*time.Second); err != nil {
 			return err
 		}
 	}
@@ -715,6 +703,7 @@ type connectOpts struct {
 	avoid     string // exit relay being failed away from
 	avoidVia  string // entry relay being failed away from
 	retry     bool   // unattended redial of a dead tunnel
+	refresh   bool   // fetch the relay list before picking
 	allowLAN  bool
 	split     bool
 	transport string
@@ -854,6 +843,13 @@ func doConnect(opts connectOpts) (retErr error) {
 	priv, err := wgtypes.ParseKey(cfg.PrivateKey)
 	if err != nil {
 		return fmt.Errorf("parse stored private key: %w (run mvad rotate-key to regenerate)", err)
+	}
+	// Mullvad retires relays; a cache that still lists them redials the
+	// dead hosts forever. A failed fetch keeps the cached list.
+	if opts.refresh || relaysStale(cfg) {
+		if err := refreshRelays(cfg, 15*time.Second); err != nil {
+			fmt.Fprintf(os.Stderr, "mvad: refresh relays: %v; using the cached list\n", err)
+		}
 	}
 	exit, err := pickRelay(cfg, opts.relay, opts.avoid)
 	if err != nil {
@@ -1162,6 +1158,7 @@ func reconnect(args []string) error {
 		avoid:     cfg.LastRelay,
 		avoidVia:  cfg.LastEntryRelay,
 		retry:     *ifDead,
+		refresh:   *ifDead, // the dead relay may be a retired one
 		allowLAN:  *allowLAN || cfg.LastAllowLAN,
 		split:     cfg.LastSplit,
 		transport: "wireguard",
@@ -1540,6 +1537,26 @@ func ssAlive(pid int) bool {
 		return false
 	}
 	return filepath.Base(target) == "ss-local"
+}
+
+func relaysStale(cfg *config.Config) bool {
+	return len(cfg.RelayCache) == 0 || time.Since(cfg.RelaysFetchedAt) > 24*time.Hour
+}
+
+func refreshRelays(cfg *config.Config, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	relays, err := mullvad.New().Relays(ctx)
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(relays)
+	if err != nil {
+		return err
+	}
+	cfg.RelayCache = data
+	cfg.RelaysFetchedAt = time.Now()
+	return cfg.Save()
 }
 
 func pickRelay(cfg *config.Config, query, avoid string) (mullvad.Relay, error) {
