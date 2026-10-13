@@ -1,4 +1,4 @@
-// Package route sets the system default route to a given interface.
+// Package route sends all traffic through a given interface.
 package route
 
 import (

@@ -55,4 +55,7 @@ func SplitMode() bool                 { return splitMode() }
 const (
 	CgroupDir = cgroupDir
 	FWMark    = fwmark
+
+	// Supported is whether this platform can separate traffic.
+	Supported = supported
 )

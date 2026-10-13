@@ -9,6 +9,7 @@ require (
 	github.com/mdlayher/netlink v1.7.2
 	golang.org/x/image v0.26.0
 	golang.org/x/sys v0.33.0
+	golang.zx2c4.com/wireguard v0.0.0-20231211153847-12269c276173
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
 )
 
@@ -24,5 +25,4 @@ require (
 	golang.org/x/net v0.33.0 // indirect
 	golang.org/x/sync v0.13.0 // indirect
 	golang.org/x/text v0.24.0 // indirect
-	golang.zx2c4.com/wireguard v0.0.0-20231211153847-12269c276173 // indirect
 )

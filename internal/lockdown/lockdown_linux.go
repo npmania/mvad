@@ -6,12 +6,17 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"log"
 	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+)
+
+const (
+	tableName  = "mvad-lockdown"
+	scriptPath = "/var/lib/mvad/lockdown.nft"
+	markerPath = "/run/mvad/lockdown"
 )
 
 func on(relayIPs []netip.Addr, iface string) error {
@@ -69,51 +74,48 @@ func active() bool {
 	return tablePresent()
 }
 
-func writeMarker() {
-	dir := filepath.Dir(markerPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		log.Printf("lockdown: mkdir %s: %v", dir, err)
-		return
-	}
-	if err := os.WriteFile(markerPath, nil, 0644); err != nil {
-		log.Printf("lockdown: write %s: %v", markerPath, err)
-	}
+func buildScript(ips []netip.Addr, iface string) string {
+	v4, v6 := splitFamilies(ips)
+	var b strings.Builder
+	fmt.Fprintf(&b, "add table inet %s\n", tableName)
+	fmt.Fprintf(&b, "delete table inet %s\n", tableName)
+	fmt.Fprintf(&b, "table inet %s {\n", tableName)
+	writeSet(&b, "relays_v4", "ipv4_addr", v4)
+	writeSet(&b, "relays_v6", "ipv6_addr", v6)
+	b.WriteString("\tchain output {\n")
+	b.WriteString("\t\ttype filter hook output priority 0; policy drop;\n")
+	b.WriteString("\t\toifname \"lo\" accept\n")
+	// Without this, a lockdown-plus-tunnel pairing passes the
+	// handshake (relay daddr) but drops every new flow inside it.
+	fmt.Fprintf(&b, "\t\toifname %q accept\n", iface)
+	b.WriteString("\t\tct state established,related accept\n")
+	b.WriteString("\t\tip daddr @relays_v4 accept\n")
+	b.WriteString("\t\tip6 daddr @relays_v6 accept\n")
+	b.WriteString("\t}\n")
+	b.WriteString("\tchain input {\n")
+	b.WriteString("\t\ttype filter hook input priority 0; policy drop;\n")
+	b.WriteString("\t\tiifname \"lo\" accept\n")
+	b.WriteString("\t\tct state established,related accept\n")
+	b.WriteString("\t}\n")
+	b.WriteString("}\n")
+	return b.String()
 }
 
-func removeMarker() {
-	if err := os.Remove(markerPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		log.Printf("lockdown: remove %s: %v", markerPath, err)
+func writeSet(b *strings.Builder, name, typ string, ips []netip.Addr) {
+	fmt.Fprintf(b, "\tset %s {\n", name)
+	fmt.Fprintf(b, "\t\ttype %s\n", typ)
+	b.WriteString("\t\tflags interval\n")
+	if len(ips) > 0 {
+		b.WriteString("\t\telements = {")
+		for i, ip := range ips {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			fmt.Fprintf(b, " %s", ip)
+		}
+		b.WriteString(" }\n")
 	}
-}
-
-func writeScript(s string) error {
-	dir := filepath.Dir(scriptPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("lockdown: mkdir %s: %w", dir, err)
-	}
-	tmp, err := os.CreateTemp(dir, ".lockdown-*.nft")
-	if err != nil {
-		return fmt.Errorf("lockdown: tempfile: %w", err)
-	}
-	name := tmp.Name()
-	if _, err := tmp.WriteString(s); err != nil {
-		tmp.Close()
-		os.Remove(name)
-		return fmt.Errorf("lockdown: write %s: %w", name, err)
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(name)
-		return err
-	}
-	if err := os.Chmod(name, 0644); err != nil {
-		os.Remove(name)
-		return err
-	}
-	if err := os.Rename(name, scriptPath); err != nil {
-		os.Remove(name)
-		return fmt.Errorf("lockdown: rename %s: %w", scriptPath, err)
-	}
-	return nil
+	b.WriteString("\t}\n")
 }
 
 func runNft(script string) error {

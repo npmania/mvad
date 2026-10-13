@@ -39,6 +39,12 @@ func down() error {
 	return fmt.Errorf("nft delete table inet %s: %w: %s", tableName, err, bytes.TrimSpace(out))
 }
 
+func installed() bool {
+	cmd := exec.Command("nft", "list", "table", "inet", tableName)
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	return cmd.Run() == nil
+}
+
 func runNft(script string) error {
 	cmd := exec.Command("nft", "-f", "-")
 	cmd.Stdin = strings.NewReader(script)

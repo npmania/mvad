@@ -4,8 +4,10 @@ package split
 
 import "net/netip"
 
+const supported = false
+
 func up(Config) error              { return ErrUnsupported }
-func down() error                  { return ErrUnsupported }
+func down() error                  { return nil }
 func addPID(int) error             { return ErrUnsupported }
 func rmPID(int) error              { return ErrUnsupported }
 func listPIDs() ([]int, error)     { return nil, ErrUnsupported }

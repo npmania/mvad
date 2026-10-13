@@ -16,6 +16,8 @@ import (
 	"strings"
 )
 
+const supported = true
+
 type state struct {
 	Split    bool       `json:"split,omitempty"`
 	Gateway  netip.Addr `json:"gateway"`

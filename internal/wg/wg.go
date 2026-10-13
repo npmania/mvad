@@ -11,6 +11,9 @@ import (
 
 var ErrUnsupported = errors.New("wg: unsupported platform")
 
+// Iface is the name of mvad's WireGuard interface.
+const Iface = iface
+
 type Config struct {
 	Name       string
 	PrivateKey wgtypes.Key
@@ -34,3 +37,8 @@ type State struct {
 func Up(cfg Config) error             { return up(cfg) }
 func Down(name string) error          { return down(name) }
 func Read(name string) (State, error) { return read(name) }
+
+// Serve runs the userspace WireGuard device for name until its UAPI
+// socket is removed or the process is signaled. It is the body of the
+// detached mvad __wg process on platforms without kernel WireGuard.
+func Serve(name string) error { return serve(name) }
