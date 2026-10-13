@@ -1,3 +1,4 @@
 /mvad
 /mvad-gui
 *.exe
+/dist
