@@ -1324,7 +1324,7 @@ func showStatus(args []string) error {
 	case "waybar":
 		out, err = status.Waybar(s)
 	default:
-		out = status.Plain(s)
+		out, err = status.Plain(s), nil
 	}
 	if err != nil {
 		return &exitErr{code: 2, err: err}
