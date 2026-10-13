@@ -575,16 +575,28 @@ type stringList []string
 func (s *stringList) String() string     { return strings.Join(*s, ",") }
 func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
 
-func matchesAny(list []string, v string) bool {
+// matchesAny reports whether list is empty or holds one of vs,
+// ignoring case.
+func matchesAny(list []string, vs ...string) bool {
 	if len(list) == 0 {
 		return true
 	}
 	for _, x := range list {
-		if strings.EqualFold(x, v) {
-			return true
+		for _, v := range vs {
+			if strings.EqualFold(x, v) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// locCodes returns the country and city codes a relay hostname starts
+// with: se and got for se-got-wg-001.
+func locCodes(hostname string) (country, city string) {
+	country, rest, _ := strings.Cut(hostname, "-")
+	city, _, _ = strings.Cut(rest, "-")
+	return country, city
 }
 
 func listRelays(args []string) error {
@@ -635,7 +647,8 @@ func listRelays(args []string) error {
 			if !b.Active {
 				continue
 			}
-			if !matchesAny(country, b.Country) || !matchesAny(city, b.City) || !matchesAny(provider, b.Provider) {
+			cc, ct := locCodes(b.Hostname)
+			if !matchesAny(country, b.Country, cc) || !matchesAny(city, b.City, ct) || !matchesAny(provider, b.Provider) {
 				continue
 			}
 			if filterOwned && b.Owned != wantOwned {
@@ -671,7 +684,8 @@ func listRelays(args []string) error {
 		if !r.Active {
 			continue
 		}
-		if !matchesAny(country, r.Country) || !matchesAny(city, r.City) || !matchesAny(provider, r.Provider) {
+		cc, ct := locCodes(r.Hostname)
+		if !matchesAny(country, r.Country, cc) || !matchesAny(city, r.City, ct) || !matchesAny(provider, r.Provider) {
 			continue
 		}
 		if filterOwned && r.Owned != wantOwned {
