@@ -56,32 +56,6 @@ func configure(cfg Config) error {
 	return c.ConfigureDevice(cfg.Name, wcfg)
 }
 
-func read(name string) (State, error) {
-	c, err := wgctrl.New()
-	if err != nil {
-		return State{}, err
-	}
-	defer c.Close()
-	d, err := c.Device(name)
-	if err != nil {
-		return State{}, err
-	}
-	s := State{Name: d.Name}
-	if len(d.Peers) > 0 {
-		p := d.Peers[0]
-		s.PeerKey = p.PublicKey
-		s.RxBytes = p.ReceiveBytes
-		s.TxBytes = p.TransmitBytes
-		s.LastHandshake = p.LastHandshakeTime
-		if p.Endpoint != nil {
-			// The userspace UAPI path yields 16-byte IPv4 addresses.
-			ap := p.Endpoint.AddrPort()
-			s.PeerEndpoint = netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())
-		}
-	}
-	return s, nil
-}
-
 func prefixToIPNet(p netip.Prefix) net.IPNet {
 	return net.IPNet{
 		IP:   p.Addr().AsSlice(),

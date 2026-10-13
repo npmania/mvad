@@ -4,7 +4,6 @@ package wg
 import (
 	"errors"
 	"net/netip"
-	"time"
 
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
@@ -25,18 +24,8 @@ type Config struct {
 	MTU        int
 }
 
-type State struct {
-	Name          string
-	PeerEndpoint  netip.AddrPort
-	PeerKey       wgtypes.Key
-	RxBytes       int64
-	TxBytes       int64
-	LastHandshake time.Time
-}
-
-func Up(cfg Config) error             { return up(cfg) }
-func Down(name string) error          { return down(name) }
-func Read(name string) (State, error) { return read(name) }
+func Up(cfg Config) error    { return up(cfg) }
+func Down(name string) error { return down(name) }
 
 // Serve runs the userspace WireGuard device for name until its UAPI
 // socket is removed or the process is signaled. It is the body of the
