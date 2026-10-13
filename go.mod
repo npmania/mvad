@@ -1,6 +1,6 @@
 module github.com/npmania/mvad
 
-go 1.24
+go 1.25.0
 
 require (
 	gioui.org v0.9.0
