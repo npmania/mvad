@@ -127,6 +127,8 @@ func TestPathPrefersXDG(t *testing.T) {
 func TestPathFallsBackToHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("SUDO_USER", "")
+	t.Setenv("PKEXEC_UID", "")
 	for _, xdg := range []string{"", "relative/dir"} {
 		t.Setenv("XDG_CONFIG_HOME", xdg)
 		p, _, err := location()
