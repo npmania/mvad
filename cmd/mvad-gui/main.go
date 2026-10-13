@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1095,7 +1096,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 				}
 				name := strings.TrimSpace(st.addAppEd.Text())
 				st.addAppEd.SetText("")
-				if name == "" || containsString(st.cfg.SplitApps, name) || containsString(curatedApps, name) {
+				if name == "" || slices.Contains(st.cfg.SplitApps, name) || slices.Contains(curatedApps, name) {
 					continue
 				}
 				st.cfg.SplitApps = append(st.cfg.SplitApps, name)

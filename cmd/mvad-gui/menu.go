@@ -55,15 +55,6 @@ func buildTrayMenu(favorites []string, up bool) []menuItem {
 	return items
 }
 
-func containsString(xs []string, s string) bool {
-	for _, x := range xs {
-		if x == s {
-			return true
-		}
-	}
-	return false
-}
-
 func findByID(items []menuItem, id int32) (menuItem, bool) {
 	for _, it := range items {
 		if it.id == id {
