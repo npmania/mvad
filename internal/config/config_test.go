@@ -15,6 +15,8 @@ func setHome(t *testing.T) string {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	t.Setenv("HOME", dir)
+	t.Setenv("SUDO_USER", "")
+	t.Setenv("PKEXEC_UID", "")
 	return dir
 }
 
@@ -71,7 +73,7 @@ func TestSaveMode(t *testing.T) {
 	if err := c.Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	p, err := path()
+	p, _, err := location()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +115,7 @@ func TestPathPrefersXDG(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdg)
 	t.Setenv("HOME", home)
-	p, err := path()
+	p, _, err := location()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +128,7 @@ func TestPathFallsBackToHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", home)
-	p, err := path()
+	p, _, err := location()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +152,7 @@ func TestPathSudoUserRedirectsToInvokerHome(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", "/root")
 	t.Setenv("PKEXEC_UID", "")
-	p, err := path()
+	p, _, err := location()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +180,7 @@ func TestPathPkexecUIDRedirectsToInvokerHome(t *testing.T) {
 	t.Setenv("HOME", "/root")
 	t.Setenv("SUDO_USER", "")
 	t.Setenv("PKEXEC_UID", uid)
-	p, err := path()
+	p, _, err := location()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +198,7 @@ func TestPathIgnoresSudoUserWhenNotRoot(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("SUDO_USER", "nonexistent-user")
 	t.Setenv("PKEXEC_UID", "999999")
-	p, err := path()
+	p, _, err := location()
 	if err != nil {
 		t.Fatal(err)
 	}

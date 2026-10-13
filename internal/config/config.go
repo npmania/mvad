@@ -1,16 +1,21 @@
 // Package config persists mvad on-disk state at
-// $XDG_CONFIG_HOME/mvad/config.json (mode 0600).
+// $XDG_CONFIG_HOME/mvad/config.json (mode 0600). Root acting for a
+// calling user (sudo, pkexec) works only in directories that user owns.
 package config
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"io/fs"
 	"net/netip"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 )
 
@@ -48,13 +53,15 @@ type Config struct {
 	SplitK8s          []string        `json:"split_k8s,omitempty"`
 }
 
-func path() (string, error) {
-	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
-		return filepath.Join(dir, "mvad", "config.json"), nil
-	}
+// location returns the config file's path and the calling user root
+// acts for, if any.
+func location() (string, *CallingUser, error) {
 	cu, err := ResolveCallingUser()
 	if err != nil {
-		return "", err
+		return "", nil, err
+	}
+	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
+		return filepath.Join(dir, "mvad", "config.json"), cu, nil
 	}
 	home := ""
 	if cu != nil {
@@ -62,10 +69,10 @@ func path() (string, error) {
 	} else {
 		home, err = os.UserHomeDir()
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 	}
-	return filepath.Join(home, ".config", "mvad", "config.json"), nil
+	return filepath.Join(home, ".config", "mvad", "config.json"), cu, nil
 }
 
 type CallingUser struct {
@@ -112,89 +119,149 @@ func ResolveCallingUser() (*CallingUser, error) {
 }
 
 func Load() (*Config, error) {
-	p, err := path()
+	p, cu, err := location()
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(p)
+	data, err := readFile(p, cu)
 	if errors.Is(err, fs.ErrNotExist) {
 		return &Config{}, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("config: %s: %w", p, err)
 	}
 	c := new(Config)
 	if err := json.Unmarshal(data, c); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("config: %s: %w", p, err)
 	}
 	return c, nil
 }
 
-func mkdirChown(dir string, mode os.FileMode, cu *CallingUser) error {
-	var toMake []string
-	cur := dir
-	for {
-		if _, err := os.Stat(cur); err == nil {
-			break
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-		toMake = append(toMake, cur)
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			break
-		}
-		cur = parent
+func readFile(p string, cu *CallingUser) ([]byte, error) {
+	r, err := openDir(filepath.Dir(p), cu, false)
+	if err != nil {
+		return nil, err
 	}
-	for i := len(toMake) - 1; i >= 0; i-- {
-		if err := os.Mkdir(toMake[i], mode); err != nil {
-			return err
-		}
-		if cu != nil {
-			if err := os.Chown(toMake[i], cu.UID, cu.GID); err != nil {
-				return err
-			}
+	defer r.Close()
+	// O_NONBLOCK: a FIFO in its place must not hang the open.
+	f, err := r.OpenFile(filepath.Base(p), os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, errors.New("not a regular file")
+	}
+	if cu != nil && !ownedBy(fi, cu.UID) {
+		return nil, fmt.Errorf("not owned by uid %d", cu.UID)
+	}
+	return io.ReadAll(f)
+}
+
+// openDir opens dir, creating it and missing parents (0700) if create
+// is set. For a non-nil cu, created directories go to cu, and every
+// directory opened must belong to cu, checked on the open handle.
+func openDir(dir string, cu *CallingUser, create bool) (*os.Root, error) {
+	// The trailing separator makes the kernel refuse anything but a
+	// directory before opening it.
+	r, err := os.OpenRoot(dir + string(filepath.Separator))
+	if create && errors.Is(err, fs.ErrNotExist) && filepath.Dir(dir) != dir {
+		r, err = mkdir(dir, cu)
+	}
+	if err != nil {
+		return nil, err
+	}
+	fi, err := r.Stat(".")
+	if err != nil {
+		r.Close()
+		return nil, err
+	}
+	if cu != nil && !ownedBy(fi, cu.UID) {
+		r.Close()
+		return nil, fmt.Errorf("%s not owned by uid %d", dir, cu.UID)
+	}
+	return r, nil
+}
+
+// mkdir creates dir through its opened parent and, for a non-nil cu,
+// chowns it through its own handle: chowning by name could hit a hard
+// link swapped in after the mkdir.
+func mkdir(dir string, cu *CallingUser) (*os.Root, error) {
+	parent, err := openDir(filepath.Dir(dir), cu, true)
+	if err != nil {
+		return nil, err
+	}
+	defer parent.Close()
+	name := filepath.Base(dir)
+	err = parent.Mkdir(name, 0700)
+	made := err == nil
+	if err != nil && !errors.Is(err, fs.ErrExist) {
+		return nil, err
+	}
+	r, err := parent.OpenRoot(name + string(filepath.Separator))
+	if err != nil {
+		return nil, err
+	}
+	if made && cu != nil {
+		if err := r.Chown(".", cu.UID, cu.GID); err != nil {
+			r.Close()
+			parent.Remove(name)
+			return nil, err
 		}
 	}
-	return nil
+	return r, nil
 }
 
 func (c *Config) Save() error {
-	p, err := path()
+	p, cu, err := location()
 	if err != nil {
-		return err
-	}
-	cu, err := ResolveCallingUser()
-	if err != nil {
-		return err
-	}
-	dir := filepath.Dir(p)
-	if err := mkdirChown(dir, 0700, cu); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(c, "", "\t")
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".config-*.json")
+	if err := writeFile(p, data, cu); err != nil {
+		return fmt.Errorf("config: %s: %w", p, err)
+	}
+	return nil
+}
+
+// writeFile replaces p through a temporary file and a rename.
+func writeFile(p string, data []byte, cu *CallingUser) error {
+	r, err := openDir(filepath.Dir(p), cu, true)
 	if err != nil {
 		return err
 	}
-	name := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(name)
+	defer r.Close()
+	name := ".config-" + rand.Text() + ".json"
+	f, err := r.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
 		return err
 	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(name)
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		r.Remove(name)
 		return err
 	}
 	if cu != nil {
-		if err := os.Chown(name, cu.UID, cu.GID); err != nil {
-			os.Remove(name)
+		if err := f.Chown(cu.UID, cu.GID); err != nil {
+			f.Close()
+			r.Remove(name)
 			return err
 		}
 	}
-	return os.Rename(name, p)
+	if err := f.Close(); err != nil {
+		r.Remove(name)
+		return err
+	}
+	if err := r.Rename(name, filepath.Base(p)); err != nil {
+		r.Remove(name)
+		return err
+	}
+	return nil
 }

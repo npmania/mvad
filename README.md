@@ -187,7 +187,7 @@ Everything mvad touches, exhaustively:
 
 - `~/.config/mvad/config.json`: token, device key, relay cache,
   options (0600; written through sudo/pkexec it stays owned by the
-  invoking user).
+  invoking user, and only into directories that user owns).
 - `/run/mvad/`: lock files, shim pidfiles, split state. tmpfs; the
   lock files linger between sessions and vanish at reboot.
 - `/var/lib/mvad/`: the persistent kill-switch ruleset, only while
