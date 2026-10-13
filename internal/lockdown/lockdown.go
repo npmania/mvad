@@ -45,7 +45,9 @@ func splitFamilies(ips []netip.Addr) (v4, v6 []netip.Addr) {
 	seen := make(map[netip.Addr]bool)
 	for _, ip := range ips {
 		ip = ip.Unmap()
-		if !ip.IsValid() || seen[ip] {
+		// A zone is free text that lands verbatim in the root-loaded
+		// ruleset; relays never have one.
+		if !ip.IsValid() || ip.Zone() != "" || seen[ip] {
 			continue
 		}
 		seen[ip] = true
