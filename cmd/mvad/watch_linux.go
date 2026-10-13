@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sync/atomic"
 
@@ -39,6 +40,14 @@ func (w *routeWatcher) Close() { w.conn.Close() }
 func (w *routeWatcher) run() {
 	for {
 		msgs, err := w.conn.Receive()
+		if errors.Is(err, unix.ENOBUFS) {
+			// The socket overflowed; what it dropped may have mattered.
+			select {
+			case w.events <- struct{}{}:
+			default:
+			}
+			continue
+		}
 		if err != nil {
 			return
 		}
