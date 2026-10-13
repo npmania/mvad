@@ -126,14 +126,16 @@ func TestPathPrefersXDG(t *testing.T) {
 
 func TestPathFallsBackToHome(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", home)
-	p, _, err := location()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := filepath.Join(home, ".config", "mvad", "config.json"); p != want {
-		t.Errorf("Path = %q, want %q", p, want)
+	for _, xdg := range []string{"", "relative/dir"} {
+		t.Setenv("XDG_CONFIG_HOME", xdg)
+		p, _, err := location()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := filepath.Join(home, ".config", "mvad", "config.json"); p != want {
+			t.Errorf("XDG_CONFIG_HOME=%q: Path = %q, want %q", xdg, p, want)
+		}
 	}
 }
 

@@ -60,7 +60,8 @@ func location() (string, *CallingUser, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
+	// The XDG spec has relative paths ignored.
+	if dir := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(dir) {
 		return filepath.Join(dir, "mvad", "config.json"), cu, nil
 	}
 	home := ""
