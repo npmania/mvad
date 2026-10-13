@@ -107,6 +107,33 @@ func up(args []string) error {
 	}
 }
 
+// retryDelay paces redials after a failed one.
+var retryDelay = 30 * time.Second
+
+// refresh adopts iface's index after a rebuild and drops the events
+// the rebuild queued. With no iface the rebuild failed; up tries again
+// after retryDelay, or at the next route change.
+func (w *routeWatcher) refresh(iface string) {
+	iff, err := net.InterfaceByName(iface)
+	if err != nil {
+		time.AfterFunc(retryDelay, func() {
+			select {
+			case w.events <- struct{}{}:
+			default:
+			}
+		})
+		return
+	}
+	w.self.Store(int32(iff.Index))
+	for {
+		select {
+		case <-w.events:
+		default:
+			return
+		}
+	}
+}
+
 func locked(f func() error) error {
 	release, err := lock.AcquireRootBlock()
 	if err != nil {

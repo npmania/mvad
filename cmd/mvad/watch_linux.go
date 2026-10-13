@@ -5,7 +5,6 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
-	"net"
 	"sync/atomic"
 
 	"github.com/mdlayher/netlink"
@@ -33,12 +32,6 @@ func newRouteWatcher(iface string) (*routeWatcher, error) {
 	w.refresh(iface)
 	go w.run()
 	return w, nil
-}
-
-func (w *routeWatcher) refresh(iface string) {
-	if iff, err := net.InterfaceByName(iface); err == nil {
-		w.self.Store(int32(iff.Index))
-	}
 }
 
 func (w *routeWatcher) Close() { w.conn.Close() }

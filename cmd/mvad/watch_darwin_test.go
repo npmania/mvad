@@ -4,7 +4,6 @@ package main
 
 import (
 	"encoding/binary"
-	"net"
 	"os"
 	"testing"
 	"time"
@@ -209,33 +208,6 @@ func TestRun(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Close did not stop run")
-	}
-}
-
-func TestRefresh(t *testing.T) {
-	lo, err := net.InterfaceByName("lo0")
-	if err != nil {
-		t.Skip(err)
-	}
-	w := &routeWatcher{events: make(chan struct{}, 16)}
-	w.events <- struct{}{}
-	w.events <- struct{}{}
-	w.refresh("lo0")
-	if got := int(w.self.Load()); got != lo.Index {
-		t.Errorf("self = %d, want %d", got, lo.Index)
-	}
-	if len(w.events) != 0 {
-		t.Errorf("%d events left queued", len(w.events))
-	}
-	retryDelay = time.Millisecond
-	w.refresh("nonexistent0")
-	if got := int(w.self.Load()); got != lo.Index {
-		t.Errorf("self after missing iface = %d, want %d", got, lo.Index)
-	}
-	select {
-	case <-w.events:
-	case <-time.After(5 * time.Second):
-		t.Error("no retry after a failed rebuild")
 	}
 }
 

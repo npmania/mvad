@@ -5,17 +5,13 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
-	"net"
 	"os"
 	"sync/atomic"
-	"time"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/npmania/mvad/internal/firewall"
 )
-
-var retryDelay = 30 * time.Second
 
 type routeWatcher struct {
 	f          *os.File
@@ -39,30 +35,6 @@ func newRouteWatcher(iface string) (*routeWatcher, error) {
 	w.refresh(iface)
 	go w.run()
 	return w, nil
-}
-
-// refresh adopts iface's index after a rebuild and drops the events
-// the rebuild queued. With no iface the rebuild failed; up tries again
-// after retryDelay, or at the next route change.
-func (w *routeWatcher) refresh(iface string) {
-	iff, err := net.InterfaceByName(iface)
-	if err != nil {
-		time.AfterFunc(retryDelay, func() {
-			select {
-			case w.events <- struct{}{}:
-			default:
-			}
-		})
-		return
-	}
-	w.self.Store(int32(iff.Index))
-	for {
-		select {
-		case <-w.events:
-		default:
-			return
-		}
-	}
 }
 
 func (w *routeWatcher) Close() { w.f.Close() }
