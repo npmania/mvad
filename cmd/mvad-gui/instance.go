@@ -7,18 +7,13 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 )
 
 func instancePath() string {
-	d := os.Getenv("XDG_RUNTIME_DIR")
-	if d == "" {
-		d = "/run/user/" + strconv.Itoa(os.Getuid())
-	}
-	return filepath.Join(d, "mvad-gui.sock")
+	return filepath.Join(instanceDir(), "mvad-gui.sock")
 }
 
 // pingInstance returns true when another mvad-gui is already running.

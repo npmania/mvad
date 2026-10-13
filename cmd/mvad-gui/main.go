@@ -35,16 +35,15 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 
-	"github.com/godbus/dbus/v5"
-
 	"github.com/npmania/mvad/internal/config"
 	"github.com/npmania/mvad/internal/lockdown"
 	"github.com/npmania/mvad/internal/mullvad"
 	"github.com/npmania/mvad/internal/split"
 	"github.com/npmania/mvad/internal/status"
+	"github.com/npmania/mvad/internal/wg"
 )
 
-const ifname = "mvad-wg0"
+const ifname = wg.Iface
 
 var buildID = func() string {
 	bi, ok := debug.ReadBuildInfo()
@@ -220,6 +219,7 @@ type state struct {
 	allowLAN    widget.Bool
 	lockdownOn  widget.Bool
 	closeToTray widget.Bool
+	loginItem   widget.Bool
 	transport   string
 	tcpPort     uint16
 	bridge      widget.Editor
@@ -425,22 +425,13 @@ func main() {
 	}
 	st.cfg = cfg
 	st.dark = cfg.Dark
-	if !cfg.DarkSet {
-		if conn, err := dbus.SessionBus(); err == nil {
-			obj := conn.Object("org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop")
-			var v dbus.Variant
-			if err := obj.Call("org.freedesktop.portal.Settings.Read", 0, "org.freedesktop.appearance", "color-scheme").Store(&v); err == nil {
-				if inner, ok := v.Value().(dbus.Variant); ok {
-					if u, ok := inner.Value().(uint32); ok && u == 1 {
-						st.dark = true
-					}
-				}
-			}
-		}
+	if !cfg.DarkSet && systemDark() {
+		st.dark = true
 	}
 	st.allowLAN.Value = cfg.AllowLAN
 	st.lockdownOn.Value = cfg.LockdownOn
 	st.closeToTray.Value = !cfg.NoCloseToTray
+	st.loginItem.Value = loginItem()
 	st.splitOtherOpen = cfg.SplitOtherOpen
 	st.transport = cfg.LastTransport
 	switch st.transport {
@@ -480,13 +471,7 @@ func main() {
 
 	go pollStatus(ctx, pollsWin, pollsTray)
 
-	conn, err := dbus.SessionBus()
-	var tr tray
-	if err == nil && sniWatcherOwned(conn) {
-		tr, err = startSNI(ctx, conn, pollsTray, windowState, trayCmds, cfg.Favorites)
-	} else {
-		tr, err = startXEmbed(ctx, pollsTray, windowState, trayCmds, cfg.Favorites)
-	}
+	tr, err := startTray(ctx, pollsTray, windowState, trayCmds, cfg.Favorites)
 	if err != nil {
 		log.Printf("tray: %v (no SNI watcher and no system tray; running windowed-only)", err)
 		tr = nil
@@ -544,7 +529,7 @@ func main() {
 					}
 					updateTrayMenu(&st, r)
 				case r := <-st.cmdDone:
-					if r.name != "xdg-open" {
+					if r.name != opener {
 						st.running = false
 						st.runningName = ""
 					}
@@ -558,6 +543,7 @@ func main() {
 
 			w := new(app.Window)
 			w.Option(app.Title("mvad"), app.Size(unit.Dp(420), unit.Dp(540)))
+			w.Perform(openActions)
 			if tr != nil {
 				setWindowState(windowState, true)
 				tr.setWake(w.Invalidate)
@@ -624,7 +610,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 			st.loadedAny = true
 			updateTrayMenu(st, r)
 		case r := <-st.cmdDone:
-			if r.name != "xdg-open" {
+			if r.name != opener {
 				st.running = false
 				st.runningName = ""
 			}
@@ -1179,6 +1165,13 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 				st.cfg.NoCloseToTray = !st.closeToTray.Value
 				_ = st.cfg.Save()
 			}
+			if st.loginItem.Update(gtx) {
+				if err := setLoginItem(st.loginItem.Value); err != nil {
+					st.loginItem.Value = !st.loginItem.Value
+					st.cmdName = "open at login"
+					st.cmdErr = err
+				}
+			}
 			if st.multihop.Update(gtx) {
 				if st.multihop.Value {
 					st.armEntry = st.selected != ""
@@ -1227,7 +1220,7 @@ func run(w *app.Window, st *state, polls <-chan pollResult, trayCmds <-chan tray
 				st.tcpPort = 5001
 			}
 			if st.openAcct.Clicked(gtx) {
-				go runExternal(st.ctx, w, st.cmdDone, "xdg-open", "https://mullvad.net/account")
+				go runExternal(st.ctx, w, st.cmdDone, opener, "https://mullvad.net/account")
 			}
 			if !st.running && st.btn.Clicked(gtx) {
 				if st.snap.Up {
@@ -1400,7 +1393,7 @@ func panelBody(gtx layout.Context, th *material.Theme, st *state, pal palette) l
 }
 
 func tabStrip(gtx layout.Context, th *material.Theme, st *state, pal palette) layout.Dimensions {
-	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+	tabs := []layout.FlexChild{
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return tab(gtx, th, &st.tabConn, pal, "Connect", st.view == viewConnect)
 		}),
@@ -1412,11 +1405,16 @@ func tabStrip(gtx layout.Context, th *material.Theme, st *state, pal palette) la
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return tab(gtx, th, &st.tabAcct, pal, "Account", st.view == viewAccount)
 		}),
-		layout.Rigid(layout.Spacer{Width: unit.Dp(16)}.Layout),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return tab(gtx, th, &st.tabSplit, pal, "Split", st.view == viewSplit)
-		}),
-	)
+	}
+	if split.Supported {
+		tabs = append(tabs,
+			layout.Rigid(layout.Spacer{Width: unit.Dp(16)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return tab(gtx, th, &st.tabSplit, pal, "Split", st.view == viewSplit)
+			}),
+		)
+	}
+	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx, tabs...)
 }
 
 func tab(gtx layout.Context, th *material.Theme, c *widget.Clickable, pal palette, label string, active bool) layout.Dimensions {
@@ -1571,9 +1569,17 @@ func settingsBody(gtx layout.Context, th *material.Theme, st *state, pal palette
 		children = append(children,
 			layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return settingsRow(gtx, th, pal, "Close to tray", "X button hides instead of quits", &st.closeToTray, false)
+				return settingsRow(gtx, th, pal, "Close to "+trayName, "X button hides instead of quits", &st.closeToTray, false)
 			}),
 		)
+		if hasLoginItem {
+			children = append(children,
+				layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return settingsRow(gtx, th, pal, "Open at login", "start in the "+trayName, &st.loginItem, false)
+				}),
+			)
+		}
 	}
 	children = append(children, favoritesSection(th, st, pal)...)
 	children = append(children,
@@ -2758,17 +2764,9 @@ var mvadCmd = func() string {
 }()
 
 func runCmd(ctx context.Context, w *app.Window, done chan<- cmdResult, args ...string) {
-	// pkexec must invoke the path the polkit policy is keyed on.
-	full := append([]string{"mvad"}, args...)
-	out, err := exec.CommandContext(ctx, "pkexec", full...).CombinedOutput()
-	if err != nil {
-		lo := strings.ToLower(string(out))
-		if strings.Contains(lo, "polkit-agent-helper") || strings.Contains(lo, "not authorized") {
-			err = errors.New("no polkit authentication agent running; install polkit-gnome (or polkit-kde-authentication-agent-1 / lxqt-policykit-agent / mate-polkit) and re-launch")
-		}
-	}
+	out, err := runPriv(ctx, args...)
 	select {
-	case done <- cmdResult{name: args[0], out: string(out), err: err}:
+	case done <- cmdResult{name: args[0], out: out, err: err}:
 	case <-ctx.Done():
 	}
 	if w != nil {
