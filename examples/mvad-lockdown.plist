@@ -12,7 +12,7 @@
 		<string>[ -e /var/run/mvad/lockdown ] &amp;&amp; exit 0
 /sbin/pfctl -q -a com.apple/mvad-lockdown -f /var/db/mvad/lockdown.pf || exit 1
 /bin/mkdir -p /var/run/mvad
-/sbin/pfctl -E 2&gt;&amp;1 | /usr/bin/sed -n 's/^Token : //p' &gt; /var/run/mvad/lockdown.token
+(umask 077; /sbin/pfctl -E 2&gt;&amp;1 | /usr/bin/sed -n 's/^Token : //p' &gt; /var/run/mvad/lockdown.token)
 /usr/bin/touch /var/run/mvad/lockdown</string>
 	</array>
 	<key>RunAtLoad</key>

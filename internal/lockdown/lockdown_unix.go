@@ -16,6 +16,11 @@ func writeMarker() {
 		log.Printf("lockdown: mkdir %s: %v", dir, err)
 		return
 	}
+	// lock creates the dir 0700, hiding the marker from the unprivileged
+	// GUI; the lock, pidfiles, and tokens keep their own 0600.
+	if err := os.Chmod(dir, 0755); err != nil {
+		log.Printf("lockdown: chmod %s: %v", dir, err)
+	}
 	if err := os.WriteFile(markerPath, nil, 0644); err != nil {
 		log.Printf("lockdown: write %s: %v", markerPath, err)
 	}
