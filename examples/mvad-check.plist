@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>io.github.npmania.mvad-check</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/mvad</string>
+		<string>reconnect</string>
+		<string>--if-dead</string>
+	</array>
+	<!-- The user whose ~/.config/mvad holds the account. -->
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>SUDO_USER</key>
+		<string>me</string>
+	</dict>
+	<key>StartInterval</key>
+	<integer>60</integer>
+	<!-- reconnect may spawn the tunnel and transport shims, which must outlive the job. -->
+	<key>AbandonProcessGroup</key>
+	<true/>
+</dict>
+</plist>

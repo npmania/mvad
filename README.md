@@ -1,7 +1,7 @@
 # mvad
 
-A small Mullvad VPN client for Linux. Speaks the Mullvad API and the
-kernel WireGuard driver directly; no daemon. The interface, routes,
+A small Mullvad VPN client for Linux and macOS. Speaks the Mullvad
+API and WireGuard directly; no daemon. The interface, routes,
 firewall, and DNS are the state: every command runs and exits, like
 ip(8).
 
@@ -13,19 +13,27 @@ Two commands:
 
 ## Requirements
 
-- Linux with the wireguard module, nftables, iproute2, and cgroup v2.
+- Linux with the wireguard module, nftables, iproute2, and cgroup v2,
+  or macOS 13 or later.
 - A Mullvad account: `mvad signup` creates one; add credit at
   mullvad.net/account.
 - Root for anything that touches the network. Use sudo, or install
-  examples/mvad.policy so the GUI can escalate through pkexec.
+  examples/mvad.policy so the GUI can escalate through pkexec. On
+  macOS the GUI asks for an administrator password for each action.
 - shadowsocks-libev, only for `--transport shadowsocks`.
 
 ## Build
 
 	go build ./cmd/...
 
-The GUI links against Gio and needs X11 or Wayland dev headers; the
-CLI alone (`go build ./cmd/mvad`) needs none.
+The GUI links against Gio and needs X11 or Wayland dev headers on
+Linux, the Xcode command line tools on macOS; the CLI alone
+(`go build ./cmd/mvad`) needs none.
+
+On macOS, `macos/build.sh` makes dist/mvad.app and
+dist/mvad-<version>.dmg with universal binaries, signed ad hoc.
+`SIGN_ID` (a Developer ID identity) and `NOTARY_PROFILE` (a notarytool
+keychain profile) sign and notarize instead.
 
 ## Usage
 
@@ -117,15 +125,15 @@ A relay can stop passing traffic with no sign of it: the interface
 stays up while traffic goes nowhere. `sudo mvad check` sends a DNS
 query to the in-tunnel resolver through the tunnel (through the split
 routing in split mode): exit 0 when it answers, 1 when the tunnel is
-dead, 3 when there is no tunnel. `sudo mvad reconnect --if-dead` runs
-the same probe and redials only a dead tunnel, so a deliberate
-disconnect stays down. The redial re-picks within the original query's
-scope, avoiding both hops it is leaving: connect with `jp-osa` and a
-dead relay is replaced by another Osaka relay.
-examples/mvad-check.timer runs it every minute. An exact-hostname
-session has nowhere to fail over to; --if-dead leaves it alone and
-lets the kernel retry the handshake, unless the relay or its key
-changed or a transport shim needs restarting.
+dead or gone with its kill-switch still up, 3 when there is no tunnel.
+`sudo mvad reconnect --if-dead` runs the same probe and redials only a
+dead tunnel, so a deliberate disconnect stays down. The redial
+re-picks within the original query's scope, avoiding both hops it is
+leaving: connect with `jp-osa` and a dead relay is replaced by another
+Osaka relay. examples/mvad-check.timer runs it every minute. An
+exact-hostname session has nowhere to fail over to; --if-dead leaves
+it alone and lets the kernel retry the handshake, unless the relay or
+its key changed or a transport shim needs restarting.
 
 ### Status
 
@@ -135,6 +143,43 @@ changed or a transport shim needs restarting.
 
 examples/wm/ has snippets for waybar, i3blocks, polybar, dwmblocks,
 and swaybar.
+
+### macOS
+
+Open the dmg and drag mvad to Applications. The app lives in the menu
+bar; Settings has "Open at login". It carries the CLI too:
+
+	sudo install -d /usr/local/bin
+	sudo install -o root -g wheel -m 0755 /Applications/mvad.app/Contents/MacOS/mvad /usr/local/bin/mvad
+
+The launchd jobs below run this copy as root. Rerun after updating
+the app.
+
+Gatekeeper blocks a build that is not notarized the first time it is
+opened from a download: allow it under System Settings > Privacy &
+Security.
+
+The CLI works the same, with these differences:
+
+- WireGuard runs in userspace. `connect` starts a detached
+  `mvad __wg utun99` holding the utun99 interface; `disconnect`
+  removes its control socket and it exits.
+- The kill-switch and lockdown are pf anchors, `com.apple/mvad` and
+  `com.apple/mvad-lockdown`; /etc/pf.conf is left alone. Each holds its
+  own pf enable reference and releases it when removed.
+- While connected the kill-switch alone decides: `--allow-lan` opens
+  the LAN even under lockdown.
+- DNS points at the in-tunnel resolver through a configd key. There
+  is no packet-level port-53 rewrite.
+- No split tunneling: `run`, `split`, and `connect --split` are Linux
+  only.
+
+examples/mvad-up.plist, mvad-check.plist, and mvad-lockdown.plist are
+the launchd counterparts of the systemd units. In mvad-up.plist and
+mvad-check.plist set `SUDO_USER` to the user whose ~/.config/mvad holds
+the account, and in mvad-up.plist the relay. Copy them to
+/Library/LaunchDaemons and load each with
+`sudo launchctl bootstrap system /Library/LaunchDaemons/<plist>`.
 
 ## Files
 
@@ -161,9 +206,31 @@ To purge mvad completely: `sudo mvad disconnect`, `sudo mvad lockdown
 off`, `mvad logout`, then delete `~/.config/mvad` and whatever you
 installed from examples/.
 
+On macOS:
+
+- `~/.config/mvad/config.json`, as above.
+- `/var/run/mvad/`: lock files, pf tokens, shim pidfiles. Cleared at
+  boot.
+- `/var/run/wireguard/utun99.sock`: the tunnel process's control
+  socket.
+- `/var/db/mvad/`: the persistent lockdown ruleset, only while
+  `lockdown on`.
+- `~/Library/LaunchAgents/io.github.npmania.mvad-gui.plist`: only
+  while "Open at login" is on.
+- Kernel and configd state: utun99, the routes 0/1, 128/1, ::/1, and
+  8000::/1, a host route to the relay, the pf anchors and their enable
+  references, and `State:/Network/Service/mvad/DNS`.
+  `sudo mvad disconnect` removes all of it (`lockdown off` for the
+  lockdown anchor). The configd key does not survive a reboot.
+
+To purge, as above, plus `sudo launchctl bootout system/<label>` for
+each plist loaded from examples/; turn off "Open at login", then
+delete /usr/local/bin/mvad and /Applications/mvad.app.
+
 ## examples/
 
 Unit files for systemd, OpenRC, runit, and rc.local covering the
 tunnel (mvad-up@), split mode (mvad-split@), lockdown, and the
-failover and split-refresh timers; a .desktop entry, polkit policy,
+failover and split-refresh timers; launchd plists for the tunnel,
+failover, and lockdown on macOS; a .desktop entry, polkit policy,
 tray icon, and a tmpfiles.d entry.
