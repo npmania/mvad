@@ -1,25 +1,23 @@
-//go:build linux
+//go:build linux || darwin
 
 package main
 
 import (
-	"encoding/binary"
 	"errors"
 	"flag"
 	"fmt"
 	"net"
 	"os"
 	"os/signal"
-	"sync/atomic"
 	"syscall"
 	"time"
 
-	"github.com/mdlayher/netlink"
 	"golang.org/x/sys/unix"
 
 	"github.com/npmania/mvad/internal/config"
 	"github.com/npmania/mvad/internal/lock"
 	"github.com/npmania/mvad/internal/notify"
+	"github.com/npmania/mvad/internal/split"
 )
 
 func up(args []string) error {
@@ -46,6 +44,9 @@ func up(args []string) error {
 		}
 		return err
 	}
+	if opts.split && !split.Supported {
+		return split.ErrUnsupported
+	}
 	// Split mode survives route changes on its own, and docker link
 	// churn would trip the watcher into reconnect loops.
 	if opts.split {
@@ -71,7 +72,7 @@ func up(args []string) error {
 	if err != nil {
 		locked(doDisconnect)
 		notify.Send("mvad", "tunnel down")
-		return fmt.Errorf("watch netlink routes: %w", err)
+		return err
 	}
 	defer w.Close()
 
@@ -116,10 +117,10 @@ func locked(f func() error) error {
 }
 
 func acquireUpLock() (func(), error) {
-	if err := os.MkdirAll("/run/mvad", 0700); err != nil {
+	if err := os.MkdirAll(runDir, 0700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile("/run/mvad/up.lock", os.O_RDWR|os.O_CREATE, 0600)
+	f, err := os.OpenFile(runDir+"/up.lock", os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
 		return nil, err
 	}
@@ -146,86 +147,4 @@ func drainQuiet(events <-chan struct{}, sig <-chan os.Signal, d time.Duration) b
 			return true
 		}
 	}
-}
-
-type routeWatcher struct {
-	conn   *netlink.Conn
-	self   atomic.Int32
-	events chan struct{}
-}
-
-func newRouteWatcher(iface string) (*routeWatcher, error) {
-	conn, err := netlink.Dial(unix.NETLINK_ROUTE, nil)
-	if err != nil {
-		return nil, err
-	}
-	for _, g := range []uint32{unix.RTNLGRP_LINK, unix.RTNLGRP_IPV4_ROUTE, unix.RTNLGRP_IPV6_ROUTE} {
-		if err := conn.JoinGroup(g); err != nil {
-			conn.Close()
-			return nil, err
-		}
-	}
-	w := &routeWatcher{conn: conn, events: make(chan struct{}, 16)}
-	w.refresh(iface)
-	go w.run()
-	return w, nil
-}
-
-func (w *routeWatcher) refresh(iface string) {
-	if iff, err := net.InterfaceByName(iface); err == nil {
-		w.self.Store(int32(iff.Index))
-	}
-}
-
-func (w *routeWatcher) Close() { w.conn.Close() }
-
-func (w *routeWatcher) run() {
-	for {
-		msgs, err := w.conn.Receive()
-		if err != nil {
-			return
-		}
-		for _, m := range msgs {
-			if !w.interesting(m) {
-				continue
-			}
-			select {
-			case w.events <- struct{}{}:
-			default:
-			}
-		}
-	}
-}
-
-func (w *routeWatcher) interesting(m netlink.Message) bool {
-	self := int(w.self.Load())
-	switch m.Header.Type {
-	case unix.RTM_NEWLINK, unix.RTM_DELLINK:
-		if len(m.Data) < 8 {
-			return false
-		}
-		idx := int(int32(binary.LittleEndian.Uint32(m.Data[4:8])))
-		return idx != self
-	case unix.RTM_NEWROUTE, unix.RTM_DELROUTE:
-		if len(m.Data) < 12 {
-			return false
-		}
-		if m.Data[1] != 0 {
-			return false
-		}
-		attrs, err := netlink.UnmarshalAttributes(m.Data[12:])
-		if err != nil {
-			return true
-		}
-		for _, a := range attrs {
-			if a.Type == unix.RTA_OIF && len(a.Data) >= 4 {
-				idx := int(int32(binary.LittleEndian.Uint32(a.Data[:4])))
-				if idx == self {
-					return false
-				}
-			}
-		}
-		return true
-	}
-	return false
 }

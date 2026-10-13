@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -39,12 +38,12 @@ import (
 )
 
 const (
-	ifname               = "mvad-wg0"
+	ifname               = wg.Iface
 	wireguardPort        = 51820
 	udp2tcpLocalPort     = 21820
-	udp2tcpPidFile       = "/run/mvad/udp2tcp.pid"
+	udp2tcpPidFile       = runDir + "/udp2tcp.pid"
 	shadowsocksLocalPort = 21822
-	shadowsocksPidFile   = "/run/mvad/shadowsocks.pid"
+	shadowsocksPidFile   = runDir + "/shadowsocks.pid"
 )
 
 var udp2tcpPorts = map[uint16]bool{80: true, 443: true, 5001: true}
@@ -207,6 +206,8 @@ func main() {
 		return
 	case "__udp2tcp":
 		err = udp2tcpShim(args)
+	case "__wg":
+		err = wgShim(args)
 	default:
 		err = usagef("unknown command %q", cmd)
 	}
@@ -796,6 +797,9 @@ func doConnect(opts connectOpts) (retErr error) {
 			notify.Send("mvad: connect failed", retErr.Error())
 		}
 	}()
+	if opts.split && !split.Supported {
+		return split.ErrUnsupported
+	}
 	if opts.split && lockdown.Active() {
 		return errors.New("lockdown blocks all plain traffic; run mvad lockdown off first")
 	}
@@ -836,7 +840,7 @@ func doConnect(opts connectOpts) (retErr error) {
 		nets = append(nets, split.LiveNets()...)
 	}
 	if useSS {
-		if _, err := exec.LookPath("ss-local"); err != nil {
+		if _, err := ssLocal(); err != nil {
 			return errors.New("ss-local not found — install shadowsocks-libev")
 		}
 	}
@@ -931,7 +935,7 @@ func doConnect(opts connectOpts) (retErr error) {
 		if err := doTeardown(); err != nil {
 			return fmt.Errorf("tear down existing state: %w", err)
 		}
-	} else if snap, _ := status.Read(ifname); snap.Up {
+	} else if snap, _ := status.Read(ifname); snap.Up || firewall.Installed() {
 		if err := doDisconnect(); err != nil {
 			return fmt.Errorf("disconnect existing tunnel: %w", err)
 		}
@@ -951,7 +955,7 @@ func doConnect(opts connectOpts) (retErr error) {
 		MTU:        1380,
 	}
 	if err := wg.Up(wcfg); err != nil {
-		return fmt.Errorf("configure wireguard interface: %w (is the wireguard kernel module loaded?)", err)
+		return fmt.Errorf("configure wireguard interface: %w%s", err, wgHint)
 	}
 	if opts.split {
 		scfg := split.Config{
@@ -1006,7 +1010,7 @@ func doConnect(opts connectOpts) (retErr error) {
 		dns.Restore(ifname)
 		route.Unset(ifname, endpoint.Addr())
 		wg.Down(ifname)
-		return fmt.Errorf("install nft kill-switch: %w (run nft list ruleset as root to inspect)", err)
+		return fmt.Errorf(firewallFail, err)
 	}
 	if useTCP {
 		if err := udp2tcpStart(udp2tcpLocalPort, endpoint); err != nil {
@@ -1034,57 +1038,14 @@ func doConnect(opts connectOpts) (retErr error) {
 			fmt.Fprintf(os.Stderr, "mvad: lan multicast route failed: %v\n", err)
 		}
 	}
-	if gwErr != nil {
-		fmt.Fprintf(os.Stderr, "mvad: split-tunnel setup skipped: %v; running without split-tunnel\n", gwErr)
-	} else if err := split.Up(split.Config{Iface: ifname, Gateway: gw, Gateway6: gw6, Dev: dev, DNS: splitDNS, AllowLAN: opts.allowLAN, Nets: nets}); err != nil {
-		fmt.Fprintf(os.Stderr, "mvad: split-tunnel setup failed: %v; running without split-tunnel\n", err)
+	if split.Supported {
+		if gwErr != nil {
+			fmt.Fprintf(os.Stderr, "mvad: split-tunnel setup skipped: %v; running without split-tunnel\n", gwErr)
+		} else if err := split.Up(split.Config{Iface: ifname, Gateway: gw, Gateway6: gw6, Dev: dev, DNS: splitDNS, AllowLAN: opts.allowLAN, Nets: nets}); err != nil {
+			fmt.Fprintf(os.Stderr, "mvad: split-tunnel setup failed: %v; running without split-tunnel\n", err)
+		}
 	}
 	return nil
-}
-
-func parseNets(ss []string) []netip.Prefix {
-	var ps []netip.Prefix
-	for _, s := range ss {
-		p, err := netip.ParsePrefix(s)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "mvad: skipping bad split net %q\n", s)
-			continue
-		}
-		ps = append(ps, p)
-	}
-	return ps
-}
-
-func isLocalAddr(a netip.Addr) bool {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return false
-	}
-	for _, ia := range addrs {
-		ipn, ok := ia.(*net.IPNet)
-		if !ok {
-			continue
-		}
-		if ip, ok := netip.AddrFromSlice(ipn.IP); ok && ip.Unmap() == a {
-			return true
-		}
-	}
-	return false
-}
-
-func readInvokerEnv() []string {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", os.Getppid()))
-	if err != nil {
-		return nil
-	}
-	var env []string
-	for p := range bytes.SplitSeq(data, []byte{0}) {
-		if len(p) == 0 {
-			continue
-		}
-		env = append(env, string(p))
-	}
-	return env
 }
 
 func reconnect(args []string) error {
@@ -1098,7 +1059,7 @@ func reconnect(args []string) error {
 	fs := flag.NewFlagSet("reconnect", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	allowLAN := fs.Bool("allow-lan", false, "allow traffic to private LAN ranges")
-	ifDead := fs.Bool("if-dead", false, "reconnect only when a tunnel exists but carries no traffic")
+	ifDead := fs.Bool("if-dead", false, "reconnect only when the tunnel carries no traffic or died under its kill-switch")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Println(usageReconnect)
@@ -1129,7 +1090,7 @@ func reconnect(args []string) error {
 		if err != nil && !errors.Is(err, status.ErrNotConnected) {
 			return err
 		}
-		if !s.Up || !tunnelDead(s) {
+		if !tunnelDead(s) {
 			return nil
 		}
 	}
@@ -1468,18 +1429,8 @@ func udp2tcpStop() error {
 	return os.Remove(udp2tcpPidFile)
 }
 
-// udp2tcpShimAlive reports whether pid still names our shim, guarding
-// against PID recycling between connect and disconnect.
-func udp2tcpShimAlive(pid int) bool {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
-	if err != nil {
-		return false
-	}
-	return strings.Contains(string(data), "__udp2tcp")
-}
-
 func ssStart(localPort int, bridge netip.Addr, ss mullvad.ShadowsocksEndpoint, peer netip.AddrPort) error {
-	bin, err := exec.LookPath("ss-local")
+	bin, err := ssLocal()
 	if err != nil {
 		return errors.New("ss-local not found — install shadowsocks-libev")
 	}
@@ -1527,16 +1478,6 @@ func ssStop() error {
 		_ = p.Signal(syscall.SIGTERM)
 	}
 	return os.Remove(shadowsocksPidFile)
-}
-
-// ssAlive reports whether pid still runs ss-local, guarding against
-// PID recycling. /proc/<pid>/exe is kernel-set; cmdline is not.
-func ssAlive(pid int) bool {
-	target, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
-	if err != nil {
-		return false
-	}
-	return filepath.Base(target) == "ss-local"
 }
 
 func relaysStale(cfg *config.Config) bool {

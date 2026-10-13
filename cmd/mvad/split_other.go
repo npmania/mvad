@@ -4,13 +4,14 @@ package main
 
 import (
 	"errors"
+	"net/netip"
 
-	"github.com/npmania/mvad/internal/status"
+	"github.com/npmania/mvad/internal/config"
 )
 
-func runCmd([]string) error           { return errors.New("run: unsupported platform") }
-func splitCmd([]string) error         { return errors.New("split: unsupported platform") }
-func checkCmd([]string) error         { return errors.New("check: unsupported platform") }
-func probeTunnel() error              { return errors.New("check: unsupported platform") }
-func tunnelDead(status.Snapshot) bool { return false }
-func escapeSplitCgroup()              {}
+func runCmd([]string) error    { return errors.New("run: unsupported platform") }
+func splitCmd([]string) error  { return errors.New("split: unsupported platform") }
+func escapeSplitCgroup()       {}
+func markSocket(uintptr) error { return nil }
+
+func resolveSplitNets(*config.Config) ([]netip.Prefix, []error) { return nil, nil }

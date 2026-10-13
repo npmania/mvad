@@ -3,8 +3,10 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -13,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/npmania/mvad/internal/config"
 	"github.com/npmania/mvad/internal/lock"
@@ -45,6 +49,10 @@ func escapeSplitCgroup() {
 	if cerr := f.Close(); werr != nil || cerr != nil {
 		fmt.Fprintln(os.Stderr, "mvad: leaving split cgroup failed; transport shims stay tagged")
 	}
+}
+
+func markSocket(fd uintptr) error {
+	return unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, split.FWMark)
 }
 
 func runCmd(args []string) error {
@@ -547,4 +555,49 @@ func syncNets(cfg *config.Config) error {
 		return fmt.Errorf("%w; live set unchanged", errors.Join(errs...))
 	}
 	return split.SetNets(nets)
+}
+
+func parseNets(ss []string) []netip.Prefix {
+	var ps []netip.Prefix
+	for _, s := range ss {
+		p, err := netip.ParsePrefix(s)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mvad: skipping bad split net %q\n", s)
+			continue
+		}
+		ps = append(ps, p)
+	}
+	return ps
+}
+
+func isLocalAddr(a netip.Addr) bool {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, ia := range addrs {
+		ipn, ok := ia.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if ip, ok := netip.AddrFromSlice(ipn.IP); ok && ip.Unmap() == a {
+			return true
+		}
+	}
+	return false
+}
+
+func readInvokerEnv() []string {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", os.Getppid()))
+	if err != nil {
+		return nil
+	}
+	var env []string
+	for p := range bytes.SplitSeq(data, []byte{0}) {
+		if len(p) == 0 {
+			continue
+		}
+		env = append(env, string(p))
+	}
+	return env
 }

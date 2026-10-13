@@ -1,5 +1,3 @@
-//go:build linux
-
 package main
 
 import (
@@ -11,16 +9,15 @@ import (
 	"syscall"
 	"time"
 
-	"golang.org/x/sys/unix"
-
+	"github.com/npmania/mvad/internal/firewall"
 	"github.com/npmania/mvad/internal/split"
 	"github.com/npmania/mvad/internal/status"
 )
 
 // checkCmd probes the tunnel end to end. Exit 1 means the tunnel
-// carries no traffic; exit 3 means there is no tunnel — deliberate
-// disconnects must not read as dead relays, or a failover timer would
-// redial them.
+// carries no traffic, or is gone while its kill-switch stays; exit 3
+// means there is no tunnel — deliberate disconnects must not read as
+// dead relays, or a failover timer would redial them.
 func checkCmd(args []string) error {
 	if wantHelp(args) {
 		fmt.Println(usageCheck)
@@ -37,22 +34,28 @@ func checkCmd(args []string) error {
 	if err != nil && !errors.Is(err, status.ErrNotConnected) {
 		return &exitErr{code: 2, err: err}
 	}
-	if !s.Up {
-		return &exitErr{code: 3, err: errors.New("not connected")}
-	}
-	if tunnelDead(s) {
+	switch dead := tunnelDead(s); {
+	case dead && !s.Up:
+		return &exitErr{code: 1, err: errors.New("tunnel gone, kill-switch still up")}
+	case dead:
 		return &exitErr{code: 1, err: errors.New("tunnel probe failed")}
+	case !s.Up:
+		return &exitErr{code: 3, err: errors.New("not connected")}
 	}
 	return nil
 }
 
-// tunnelDead reports whether a tunnel that is Up carries no traffic. A
-// fresh WireGuard handshake means the relay answered within the last
-// rekey interval, so the data plane is live even if the in-tunnel
-// resolver is momentarily unreachable; only when there is no such
-// corroboration does a failed probe condemn the tunnel. This keeps a
-// resolver hiccup from tearing down a working session.
+// tunnelDead reports whether the tunnel carries no traffic: it is gone
+// under its kill-switch, or it is Up and fails the probe. A fresh
+// WireGuard handshake means the relay answered within the last rekey
+// interval, so the data plane is live even if the in-tunnel resolver
+// is momentarily unreachable; only when there is no such corroboration
+// does a failed probe condemn the tunnel. This keeps a resolver hiccup
+// from tearing down a working session.
 func tunnelDead(s status.Snapshot) bool {
+	if !s.Up {
+		return firewall.Installed()
+	}
 	if !s.LastHandshake.IsZero() && time.Since(s.LastHandshake) < handshakeFresh {
 		return false
 	}
@@ -77,7 +80,7 @@ func probeTunnel() error {
 			}
 			var serr error
 			err := c.Control(func(fd uintptr) {
-				serr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, split.FWMark)
+				serr = markSocket(fd)
 			})
 			return errors.Join(err, serr)
 		},
