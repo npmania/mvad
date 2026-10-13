@@ -256,6 +256,11 @@ func writeFile(p string, data []byte, cu *CallingUser) error {
 			return err
 		}
 	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		r.Remove(name)
+		return err
+	}
 	if err := f.Close(); err != nil {
 		r.Remove(name)
 		return err
